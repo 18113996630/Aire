@@ -1,0 +1,23 @@
+{
+  "name": "aire",
+  "version": "0.1.0",
+  "description": "AI iOS App Replica Engine",
+  "type": "module",
+  "bin": {
+    "aire": "./bin/aire.js"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/unit/*.test.ts tests/integration/*.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/unit/*.test.ts",
+    "test:integration": "node --experimental-strip-types --test tests/integration/*.test.ts",
+    "test:e2e": "node --experimental-strip-types --test tests/e2e/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3"
+  }
+}
