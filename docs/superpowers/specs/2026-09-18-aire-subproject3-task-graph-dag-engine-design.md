@@ -41,7 +41,7 @@
    - 全局运行状态与崩溃恢复以 `.aire/run-state.json` 为唯一法定源，记录 `graphHash`, `graphVersion`, `schemaVersion`，并内置 Schema 升级迁移拦截机制；
    - 状态持久化遵循 **WAL 风格严格时序（WAL-style Persistence Ordering）** 与 **原子文件替换（Atomic Temp-Rename）** 机制；
    - Commit Message 注入机器可验证的 Git Trailer（`AIRE-Run-Id`, `AIRE-Task-Id`, `AIRE-Base-Commit`），使 Crash Recovery 能够可靠校准提交事实，杜绝重复提交与错误回滚；
-   - **闭环持久化一致性链（Git → RunState → TaskResult）**：当恢复处于 `SUCCEEDED` 状态的任务时，若检测到 `TaskResult` 缺失，能够自动基于 Git Commit 与 Task 元数据幂等重建，杜绝下游依赖读取缺失；
+   - **闭环持久化一致性链（Git → TaskResult → RunState）**：当恢复处于 `SUCCEEDED` 状态的任务时，若检测到 `TaskResult` 缺失，能够自动基于 Git Commit 与 Task 元数据幂等重建，杜绝下游依赖读取缺失；
    - 支持通过 `--retry-task <id>` 重置失败节点，重置时将该节点与受阻下游统一置为 `PENDING`，并通过 DAG 重新严格推导就绪态，杜绝多依赖节点的早熟执行。
 5. **结构化契约与产物交接（Structured Artifact Hand-Off）**：
    - Git 工作区源码是唯一真相源，每个成功任务通过 `IArtifactManager` 持久化 `.aire/tasks/<taskId>/result.json` 作为“索引雷达”；

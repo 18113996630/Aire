@@ -4,7 +4,7 @@
 
 **Goal:** 构建轻量嵌入式拓扑 DAG 调度编排引擎，实现多任务依赖解析、确定性拓扑调度、原子分支失败隔离与级联阻断、防漂移断点续跑（Resume）以及基于结构化契约索引的直接依赖产物交接（Structured Artifact Hand-Off）。
 
-**Architecture:** 严格解耦图调度决策（`TaskGraph`）、单任务执行（`TaskRunner`）、工作区隔离策略（`IWorkspaceStrategy`）、容错策略（`IExecutionPolicy`）、全局断点状态（`IRunStateStore`）与任务产物索引（`IArtifactManager`）。采用 WAL 风格原子持久化时序与机器可验证的 Git Commit Trailer 实现高可靠 Crash Recovery。
+**Architecture:** 严格解耦图调度决策（`TaskGraph`）、单任务执行适配（`TaskRunner` 适配已有 Atomic Engine）、工作区隔离策略（`IWorkspaceStrategy`）、容错策略（`IExecutionPolicy`）、全局断点状态（`IRunStateStore`）与任务产物索引（`IArtifactManager`）。采用 WAL 风格原子持久化时序与机器可验证的 Git Commit Trailer 实现高可靠 Crash Recovery。
 
 **Tech Stack:** TypeScript (Node.js `--experimental-strip-types`), `yaml` npm 包, Git 原生 CLI (`git interpret-trailers`, `git diff`, `git reset`), macOS 原生 `xcrun simctl` 与 `xcodebuild`.
 
@@ -20,6 +20,7 @@
 - **持久化一致性与 WAL 风格时序**：`saveRunState` 必须使用临时文件 + fsync + 原子重命名（`atomic rename`）；成功分支遵循 `commit -> persist TaskResult -> persist RunState`。
 - **机器可验证 Git Trailer**：每个任务提交必须注入 `AIRE-Run-Id`, `AIRE-Task-Id`, `AIRE-Base-Commit`。
 - **直接依赖契约**：下游任务 Prompt 只挂载直接依赖的 `TaskResult`，严禁累积全图聊天记录或全量祖先记录。
+- **并发约束**：Phase 3 CLI 不提供 `--max-concurrency` 参数，调度器内部强制 `maxConcurrency = 1`。
 
 ---
 
@@ -28,19 +29,19 @@
 ```text
 src/
 ├── dag/
-│   ├── types.ts                              # DAG 核心类型、节点、状态与报告接口
-│   ├── task-graph.ts                         # TaskGraph 拓扑解析、环检测与就绪推导
+│   ├── types.ts                              # DAG 核心类型、节点、状态与报告完整共享接口
+│   ├── task-graph.ts                         # TaskGraph 拓扑解析、环检测、重名检查与就绪推导
 │   ├── artifact-manager.interface.ts         # IArtifactManager 抽象接口
 │   ├── artifact-manager.ts                   # 任务级产物存储与幂等重建实现
 │   ├── run-state-store.interface.ts          # IRunStateStore 抽象接口
 │   ├── run-state-store.ts                    # 全局运行状态原子落盘与 Schema 迁移
 │   ├── workspace-strategy.interface.ts       # IWorkspaceStrategy 抽象接口
 │   ├── serial-workspace-strategy.ts          # 基于主分支与 Git Trailer 的工作区策略
-│   ├── execution-policy.interface.ts         # IExecutionPolicy 抽象接口
-│   ├── cascade-execution-policy.ts           # 失败隔离与子孙级联阻断决策策略
+│   ├── execution-policy.interface.ts         # IExecutionPolicy 抽象接口（纯决策）
+│   ├── cascade-execution-policy.ts           # 纯决策策略实现（输出 CASCADE_BLOCK_AND_CONTINUE）
 │   ├── prompt-builder-dag.ts                 # 直接前置依赖契约装配器
 │   ├── task-runner.interface.ts              # ITaskRunner 抽象接口
-│   ├── task-runner.ts                        # 动态评估管道组装与单任务状态机适配器
+│   ├── task-runner.ts                        # 适配已有 Atomic Engine 的 DAG 任务适配器
 │   ├── scheduler.interface.ts                # IScheduler 抽象接口
 │   └── serial-dag-scheduler.ts               # 拓扑主调度器与 Crash Recovery
 bin/
@@ -51,13 +52,13 @@ fixtures/
 tests/
 ├── unit/
 │   └── dag/
-│       ├── task-graph.test.ts                # YAML 解析、环检测与拓扑推导单测
+│       ├── task-graph.test.ts                # YAML 解析、重名校验、环检测与拓扑推导单测
 │       ├── artifact-manager.test.ts          # 产物保存、过滤与幂等重建单测
 │       ├── run-state-store.test.ts           # 原子写入、哈希防漂移与版本迁移单测
 │       ├── workspace-strategy.test.ts        # 快照捕获、Trailer 注入与回滚单测
-│       ├── execution-policy.test.ts          # 级联阻断与重试状态重算单测
+│       ├── execution-policy.test.ts          # 失败决策枚举单测
 │       ├── prompt-builder-dag.test.ts        # 直接依赖 Prompt 装配单测
-│       └── task-runner.test.ts               # 动态评估管道装配单测
+│       └── task-runner.test.ts               # 适配已有 StateMachine 与 EvaluatorPipeline 单测
 ├── integration/
 │   ├── dag-diamond-flow.test.ts              # 菱形依赖 A->(B,C)->D 成功全链路集成测试
 │   ├── dag-failure-cascade.test.ts           # 单分支自愈失败隔离与平行分支继续测试
@@ -68,7 +69,7 @@ tests/
 
 ---
 
-### Task 1: 引入 YAML 解析依赖与 DAG 核心类型定义（Types & YAML Dep）
+### Task 1: 引入 YAML 解析依赖与 DAG 核心类型全量定义（Types & YAML Dep）
 
 **Files:**
 - Modify: `package.json`
@@ -76,12 +77,21 @@ tests/
 - Test: `tests/unit/dag/task-graph-types.test.ts`
 
 **Interfaces:**
-- Produces:
+- Produces (完整包含 Design Spec Section 2 / 3 中所有共享数据契约):
   - `TaskExecutionStatus`: `'PENDING' | 'READY' | 'RUNNING' | 'VERIFYING' | 'REPAIRING' | 'RETRYING' | 'SUCCEEDED' | 'FAILED' | 'BLOCKED' | 'CANCELLED'`
-  - `TaskNode`: 包含 `id`, `title`, `goal`, `dependencies`, `dependents`, `allowed_files`, `acceptance_criteria`, `verification`, `max_retries`
+  - `TaskNode`: 包含 `id`, `title`, `goal`, `non_goals`, `role`, `dependencies`, `dependents`, `allowed_files`, `acceptance_criteria`, `verification`, `max_retries`
+  - `TaskGraphVerification`: 包含 `build`, `visual`, `test`
   - `TaskGraphConfig`: 包含 `version`, `project`, `tasks`
-  - `DagRunState`: 包含 `schemaVersion`, `graphVersion`, `graphHash`, `runId`, `status`, `activeTaskIds`, `tasks`
-  - `TaskResult`: 包含 `taskId`, `summary`, `changedFiles`, `artifacts`, `apiContracts`, `baseCommit`, `commit`
+  - `TaskRunRecord`: 包含 `taskId`, `status`, `retryCount`, `baseCommit`, `commit`, `startedAt`, `completedAt`, `blockedBy`, `error`, `resultPath`
+  - `DagRunState`: 包含 `schemaVersion`, `graphVersion`, `graphHash`, `runId`, `graphPath`, `status`, `activeTaskIds`, `startedAt`, `updatedAt`, `tasks`
+  - `TaskResult`: 包含 `taskId`, `title`, `goal`, `status`, `summary`, `changedFiles`, `artifacts`, `apiContracts`, `baseCommit`, `commit`, `completedAt`
+  - `WorkspaceContext`: 包含 `projectPath`, `taskId`, `runId`, `allowedFiles`
+  - `CommitMetadata`: 包含 `runId`, `taskId`, `baseCommit`, `title`
+  - `SchedulerOptions`: 包含 `projectPath`, `maxConcurrency`, `retryTaskId`
+  - `DagExecutionReport`: 包含 `runId`, `status`, `durationMs`, `completedTasks`, `failedTasks`, `blockedTasks`, `taskReports`
+  - `TaskExecutionOutcome`: 包含 `success`, `taskId`, `baseCommit`, `commit`, `changedFiles`, `error`, `summary`
+  - `TaskError`: 包含 `type`, `message`, `details`
+  - `FailureDecision`: `'CASCADE_BLOCK_AND_CONTINUE' | 'ABORT_ALL'`
 
 - [ ] **Step 1: 安装 yaml 依赖并配置 package.json**
 
@@ -90,21 +100,41 @@ export PATH="/Users/huangrong/.nvm/versions/node/v25.3.0/bin:$PATH"
 npm install yaml
 ```
 
-- [ ] **Step 2: 编写针对类型导出的失败单元测试**
+- [ ] **Step 2: 编写针对全部共享类型导出的单元测试**
 
 创建 `tests/unit/dag/task-graph-types.test.ts`：
 ```typescript
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { TaskExecutionStatus, TaskNode, DagRunState, TaskResult } from '../../../src/dag/types.ts';
+import type {
+  TaskExecutionStatus,
+  TaskNode,
+  TaskGraphConfig,
+  TaskGraphVerification,
+  DagRunState,
+  TaskRunRecord,
+  TaskResult,
+  WorkspaceContext,
+  CommitMetadata,
+  SchedulerOptions,
+  DagExecutionReport,
+  TaskExecutionOutcome,
+  TaskError,
+  FailureDecision
+} from '../../../src/dag/types.ts';
 
-test('TaskExecutionStatus covers all required lifecycle states', () => {
+test('TaskExecutionStatus covers all 10 required lifecycle states', () => {
   const statuses: TaskExecutionStatus[] = [
     'PENDING', 'READY', 'RUNNING', 'VERIFYING',
     'REPAIRING', 'RETRYING', 'SUCCEEDED', 'FAILED',
     'BLOCKED', 'CANCELLED'
   ];
   assert.equal(statuses.length, 10);
+});
+
+test('FailureDecision covers CASCADE_BLOCK_AND_CONTINUE and ABORT_ALL', () => {
+  const decisions: FailureDecision[] = ['CASCADE_BLOCK_AND_CONTINUE', 'ABORT_ALL'];
+  assert.equal(decisions.length, 2);
 });
 ```
 
@@ -124,12 +154,12 @@ Expected: PASS。
 
 ```bash
 git add package.json package-lock.json src/dag/types.ts tests/unit/dag/task-graph-types.test.ts
-git commit -m "feat(dag): introduce yaml dependency and define core DAG types"
+git commit -m "feat(dag): introduce yaml dependency and define complete shared DAG types"
 ```
 
 ---
 
-### Task 2: TaskGraph 拓扑图模型与环检测实现（TaskGraph & Cycle Detection）
+### Task 2: TaskGraph 拓扑图模型、环检测与 Duplicate ID 校验（TaskGraph Model）
 
 **Files:**
 - Create: `src/dag/task-graph.ts`
@@ -147,14 +177,16 @@ git commit -m "feat(dag): introduce yaml dependency and define core DAG types"
     - `getTransitiveDependents(id: string): TaskNode[]`
     - `computeReadyTasks(records: Record<string, { status: TaskExecutionStatus }>): TaskNode[]`
   - `class CycleDetectedError extends Error`: 包含循环路径 `cyclePath: string[]`
+  - `class DuplicateTaskIdError extends Error`: 包含重复的 `taskId: string`
 
-- [ ] **Step 1: 编写拓扑解析与环检测失败单元测试**
+- [ ] **Step 1: 编写拓扑解析、环检测与重复 ID 失败单元测试**
 
 在 `tests/unit/dag/task-graph.test.ts` 中编写：
 1. 正常线性图解析与反向 `dependents` 校验；
-2. 环检测异常（如 A->B->C->A）断言抛出 `CycleDetectedError`；
-3. 未知依赖引用异常断言抛错；
-4. `computeReadyTasks` 根据状态推导就绪节点。
+2. **重复任务 ID 校验**：传入包含两个同名 `id: task-model` 的 YAML，断言精确抛出 `DuplicateTaskIdError`；
+3. 环检测异常（如 A->B->C->A）断言抛出 `CycleDetectedError` 并携带路径；
+4. 未知依赖引用异常断言抛错；
+5. `computeReadyTasks` 根据状态推导就绪节点。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -162,11 +194,11 @@ git commit -m "feat(dag): introduce yaml dependency and define core DAG types"
 export PATH="/Users/huangrong/.nvm/versions/node/v25.3.0/bin:$PATH"
 node --experimental-strip-types --test tests/unit/dag/task-graph.test.ts
 ```
-Expected: FAIL（模块未实现）。
+Expected: FAIL。
 
 - [ ] **Step 3: 编写 `src/dag/task-graph.ts` 实现**
 
-实现 YAML 解析（使用 `yaml.parse`）、DFS 染色法环检测算法、反向依赖构建与 `computeReadyTasks`。
+实现 YAML 解析、重复 ID 校验、DFS 染色法环检测算法、反向依赖构建与 `computeReadyTasks`。
 
 - [ ] **Step 4: 运行测试验证**
 
@@ -180,7 +212,7 @@ Expected: PASS。
 
 ```bash
 git add src/dag/task-graph.ts tests/unit/dag/task-graph.test.ts
-git commit -m "feat(dag): implement TaskGraph parser, cycle detection, and ready state derivation"
+git commit -m "feat(dag): implement TaskGraph with duplicate ID check, cycle detection, and ready state derivation"
 ```
 
 ---
@@ -206,7 +238,7 @@ git commit -m "feat(dag): implement TaskGraph parser, cycle detection, and ready
 在 `tests/unit/dag/artifact-manager.test.ts` 中测试：
 1. 保存并读取 `.aire/tasks/<taskId>/result.json`；
 2. 批量读取只获取直接依赖项，不存在时返回空；
-3. `reconstructTaskResult` 根据元数据和文件列表生成合法的 `TaskResult` 并写入文件。
+3. `reconstructTaskResult` 根据元数据和文件列表幂等生成合法的 `TaskResult` 并写入文件。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -330,7 +362,7 @@ git commit -m "feat(dag): implement SerialWorkspaceStrategy with Git trailer met
 
 ---
 
-### Task 6: 容错决策与依赖级联阻断策略（CascadeExecutionPolicy）
+### Task 6: 纯容错决策策略（CascadeExecutionPolicy）
 
 **Files:**
 - Create: `src/dag/execution-policy.interface.ts`
@@ -343,20 +375,19 @@ git commit -m "feat(dag): implement SerialWorkspaceStrategy with Git trailer met
   - `IExecutionPolicy`:
     - `onTaskFailure(task: TaskNode, error: TaskError, graph: TaskGraph): FailureDecision`
   - `class CascadeExecutionPolicy implements IExecutionPolicy`:
-    - 提供根据失败节点计算所有需要被置为 `BLOCKED` 的下游子孙节点列表方法
+    - **职责严格受限为纯决策**：只返回 `FailureDecision.CASCADE_BLOCK_AND_CONTINUE`，绝不修改图状态，也不计算阻断集合（阻断集合由 `TaskGraph.getTransitiveDependents` 计算，状态由 `Scheduler` 统一迁移）。
 
 - [ ] **Step 1: 编写 CascadeExecutionPolicy 失败单元测试**
 
 在 `tests/unit/dag/execution-policy.test.ts` 中测试：
-1. 任务失败返回 `FailureDecision.CASCADE_BLOCK_AND_CONTINUE`；
-2. 菱形依赖中，B 失败时精确推导 D 需要被阻断，而 C 绝不在阻断名单中；
-3. 支持多级传递阻断（B -> D -> E）。
+1. `onTaskFailure` 返回 `FailureDecision.CASCADE_BLOCK_AND_CONTINUE`；
+2. 配合 `TaskGraph.getTransitiveDependents` 测试依赖图推导：验证 B 失败时，图模型推导出 D 受阻，而独立分支 C 绝不在受阻集合中。
 
 - [ ] **Step 2: 运行测试确认失败**
 
-- [ ] **Step 3: 编写 `src/dag/cascade-execution-policy.ts` 实现**
+- [ ] **Step 3: 编写 `src/dag/execution-policy.interface.ts` 与 `src/dag/cascade-execution-policy.ts`**
 
-使用图模型的 `getTransitiveDependents` 计算受阻节点。
+实现纯决策输出，保持接口最小化。
 
 - [ ] **Step 4: 运行测试验证通过**
 
@@ -370,7 +401,7 @@ Expected: PASS。
 
 ```bash
 git add src/dag/execution-policy.interface.ts src/dag/cascade-execution-policy.ts tests/unit/dag/execution-policy.test.ts
-git commit -m "feat(dag): implement CascadeExecutionPolicy with selective branch blocking"
+git commit -m "feat(dag): implement pure CascadeExecutionPolicy returning failure decisions"
 ```
 
 ---
@@ -417,7 +448,7 @@ git commit -m "feat(dag): implement buildDagTaskPrompt with direct predecessor c
 
 ---
 
-### Task 8: 单任务执行适配器与动态评估管道装配（TaskRunner）
+### Task 8: 适配已有 Atomic Engine 的 TaskRunner（TaskRunner Adapter）
 
 **Files:**
 - Create: `src/dag/task-runner.interface.ts`
@@ -429,19 +460,20 @@ git commit -m "feat(dag): implement buildDagTaskPrompt with direct predecessor c
 - Produces:
   - `ITaskRunner`:
     - `executeTask(task: TaskNode, projectPath: string, runId: string, dependencyResults: TaskResult[], baseCommit: string, onStateChange: (status: TaskExecutionStatus) => Promise<void>): Promise<TaskExecutionOutcome>`
+  - **核心约束**：`TaskRunner` 为 DAG 层适配器，负责将 `TaskNode + Direct Dependency TaskResult` 转换为现有 Atomic Engine 所需的 `TaskContext`，复用已有 `StateMachine / EvaluatorPipeline / CLI Adapter`，**不得重新实现单任务执行内核**。
 
-- [ ] **Step 1: 编写 TaskRunner 失败单元测试**
+- [ ] **Step 1: 编写 TaskRunner 适配器失败单元测试**
 
 在 `tests/unit/dag/task-runner.test.ts` 中测试：
 1. 当 `task.verification` 仅有 `build: true` 时，仅创建 `XcodeBuildEvaluator`；
 2. 当 `task.verification` 包含 `visual` 配置时，自动组装 `[XcodeBuildEvaluator, VisualReviewEvaluator]`；
-3. 验证回调函数 `onStateChange` 正确触发 `RUNNING`, `VERIFYING`, `SUCCEEDED` / `FAILED` 等跃迁。
+3. 将执行委托给已有 `StateMachine.run()`，并在自愈与评估流转中正确触发 `onStateChange` 回调（`RUNNING`, `VERIFYING`, `REPAIRING`, `RETRYING`）。
 
 - [ ] **Step 2: 运行测试确认失败**
 
 - [ ] **Step 3: 编写 `src/dag/task-runner.ts` 实现**
 
-结合 `buildDagTaskPrompt` 组装任务上下文，调度 `EvaluatorPipeline` 与 `StateMachine`。
+将 `TaskNode` 转译为 `TaskContext`（调用 `createTaskContext` 并注入 Prompt），适配已有 `StateMachine`。
 
 - [ ] **Step 4: 运行测试验证通过**
 
@@ -455,7 +487,7 @@ Expected: PASS。
 
 ```bash
 git add src/dag/task-runner.interface.ts src/dag/task-runner.ts tests/unit/dag/task-runner.test.ts
-git commit -m "feat(dag): implement TaskRunner with dynamic EvaluatorPipeline assembly and state emission"
+git commit -m "feat(dag): implement TaskRunner adapter reusing existing StateMachine and EvaluatorPipeline"
 ```
 
 ---
@@ -477,16 +509,16 @@ git commit -m "feat(dag): implement TaskRunner with dynamic EvaluatorPipeline as
 - [ ] **Step 1: 编写 SerialDagScheduler 失败单元测试**
 
 在 `tests/unit/dag/serial-dag-scheduler.test.ts` 中测试：
-1. 线性双任务调度全成功，最终 Run 状态为 `SUCCEEDED`；
-2. 单分支失败时阻断下游，独立平行分支顺利跑完，最终 Run 状态为 `HALTED`；
+1. 线性双任务调度全成功，最终 Run 状态判定为 `SUCCEEDED`（而非 HALTED）；
+2. 单分支失败时，图模型将下游标记为 `BLOCKED`，独立平行分支顺利跑完，最终 Run 状态判定为 `HALTED`；
 3. 断点续跑前哈希校验；
-4. 支持 `--retry-task` 重置为 `PENDING` 并安全重算就绪态。
+4. 支持 `--retry-task` 重置失败与受阻节点为 `PENDING`，并通过 `computeReadyTasks` 安全重算就绪态。
 
 - [ ] **Step 2: 运行测试确认失败**
 
 - [ ] **Step 3: 编写 `src/dag/serial-dag-scheduler.ts` 实现**
 
-严格实现设计规范第 4.3 节的 WAL 风格持久化调度时序与第 4.4 节的恢复校准四步法。
+严格实现设计规范第 4.3 节的 WAL 风格持久化调度时序与第 4.4 节的恢复校准四步法（含 TaskResult 幂等补齐）。
 
 - [ ] **Step 4: 运行测试验证通过**
 
@@ -568,7 +600,8 @@ git commit -m "test(integration): add DAG diamond flow, failure cascade, and 3-s
 
 **Interfaces:**
 - Produces:
-  - `aire run --task-graph <path> [--project <dir>] [--resume] [--retry-task <id>] [--max-concurrency <n>]`
+  - `aire run --task-graph <path> [--project <dir>] [--resume] [--retry-task <id>]`
+  - **并发控制**：CLI 不暴露 `--max-concurrency`，内部通过 `SchedulerOptions` 强制 `maxConcurrency = 1`
   - 完整装配 `SerialDagScheduler` 驱动端到端多任务执行
 
 - [ ] **Step 1: 创建 `fixtures/MiniApp/task-graph.yaml` 真实靶场任务配置**
