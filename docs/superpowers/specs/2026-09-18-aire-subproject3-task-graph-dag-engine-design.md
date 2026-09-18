@@ -41,13 +41,14 @@
    - 全局运行状态与崩溃恢复以 `.aire/run-state.json` 为唯一法定源，记录 `graphHash`, `graphVersion`, `schemaVersion`，并内置 Schema 升级迁移拦截机制；
    - 状态持久化遵循 **WAL 风格严格时序（WAL-style Persistence Ordering）** 与 **原子文件替换（Atomic Temp-Rename）** 机制；
    - Commit Message 注入机器可验证的 Git Trailer（`AIRE-Run-Id`, `AIRE-Task-Id`, `AIRE-Base-Commit`），使 Crash Recovery 能够可靠校准提交事实，杜绝重复提交与错误回滚；
+   - **闭环持久化一致性链（Git → RunState → TaskResult）**：当恢复处于 `SUCCEEDED` 状态的任务时，若检测到 `TaskResult` 缺失，能够自动基于 Git Commit 与 Task 元数据幂等重建，杜绝下游依赖读取缺失；
    - 支持通过 `--retry-task <id>` 重置失败节点，重置时将该节点与受阻下游统一置为 `PENDING`，并通过 DAG 重新严格推导就绪态，杜绝多依赖节点的早熟执行。
 5. **结构化契约与产物交接（Structured Artifact Hand-Off）**：
    - Git 工作区源码是唯一真相源，每个成功任务通过 `IArtifactManager` 持久化 `.aire/tasks/<taskId>/result.json` 作为“索引雷达”；
    - 下游任务 Prompt 仅挂载**直接前置依赖**的 `TaskResult`（摘要、变更文件、API 契约、文档产物路径），严格控制上下文规模。
 6. **完备的三层测试金字塔**：
    - Layer 1 单元测试（YAML 解析、拓扑排序、环检测、防漂移校验、就绪状态推导、Prompt 注入）；
-   - Layer 2 集成测试（菱形依赖全链路、分支失败隔离与级联阻断、崩溃恢复双场景与 Commit Trailer 校准、修复后重试）；
+   - Layer 2 集成测试（菱形依赖全链路、分支失败隔离与级联阻断、崩溃恢复三场景覆盖与 Commit Trailer/TaskResult 幂等补齐、修复后重试）；
    - Layer 3 E2E 测试（CLI `--task-graph` 完整驱动 MiniApp 靶场）。
 
 ---
@@ -158,11 +159,18 @@ export interface IExecutionPolicy {
 
 #### 2.2.4 产物索引与运行状态接口分离
 ```typescript
-// 1. 任务级产物契约管理器
+// 1. 任务级产物契约管理器（支持幂等重建）
 export interface IArtifactManager {
   saveTaskResult(projectPath: string, result: TaskResult): Promise<void>;
   getTaskResult(projectPath: string, taskId: string): Promise<TaskResult | null>;
   getDirectDependencyResults(projectPath: string, dependencyIds: string[]): Promise<TaskResult[]>;
+  reconstructTaskResult(
+    projectPath: string,
+    task: TaskNode,
+    baseCommit: string,
+    commit: string,
+    changedFiles: string[]
+  ): Promise<TaskResult>;
 }
 
 // 2. 全局运行状态与断点恢复存储器（含 Schema 迁移机制与原子落盘契约）
@@ -361,15 +369,15 @@ function computeReadyTasks(graph: TaskGraph, records: Record<string, TaskRunReco
                AIRE-Task-Id: <taskId>
                AIRE-Base-Commit: <baseCommit>"
             2. 获取最新 commit sha
-            3. 【原子持久化】清空 activeTaskIds，task.status = 'SUCCEEDED', task.commit = commit
-            4. WorkspaceStrategy 提取变更文件 (git diff --name-only baseCommit..commit)
-            5. 构造 TaskResult 并持久化至 .aire/tasks/<taskId>/result.json
+            3. WorkspaceStrategy 提取变更文件 (git diff --name-only baseCommit..commit)
+            4. 构造 TaskResult 并通过 ArtifactManager 持久化至 .aire/tasks/<taskId>/result.json
+            5. 【原子持久化】清空 activeTaskIds，task.status = 'SUCCEEDED', task.commit = commit, task.resultPath = ...
             6. 调度器回到步骤 1，重新通过 computeReadyTasks() 激活下游就绪任务
 ```
 
 ### 4.4 机器可验证的 Crash Recovery 与防漂移断点续跑
 
-当运行 `aire run --task-graph <path> --resume` 时，调度器严格执行三步校准：
+当运行 `aire run --task-graph <path> --resume` 时，调度器严格执行四步校准：
 
 #### Step 1: 防漂移与 Schema 迁移校验
 1. **Schema 兼容性与迁移**：
@@ -391,10 +399,16 @@ function computeReadyTasks(graph: TaskGraph, records: Record<string, TaskRunReco
      git log -1 --format="%(trailers:key=AIRE-Task-Id,valueonly)"
      ```
      - 若提取出的 `AIRE-Task-Id` 严格等于当前 `taskId` 且 `AIRE-Run-Id` 匹配：
-       **机器可验证该提交确属本任务！** 调度器安全校准状态为 `SUCCEEDED`，记录 `commit = HEAD`，补全 `TaskResult` 持久化，清空 `activeTaskIds`，杜绝错误回滚与重复提交！
+       **机器可验证该提交确属本任务！** 调度器提取变更文件，通过 `ArtifactManager.reconstructTaskResult` 幂等生成并持久化 `TaskResult`，校准状态为 `SUCCEEDED`，记录 `commit = HEAD`，清空 `activeTaskIds`，杜绝错误回滚与重复提交！
      - 若 Trailer 不匹配或不存在：说明存在外部干扰，调度器抛出 `WorkspaceInconsistentError` 保护现场并终止。
 
-#### Step 3: 修复后重试（`--retry-task <taskId>`）状态重算
+#### Step 3: 已成功节点 TaskResult 幂等补全校准（TaskResult Reconciliation）
+为防范“RunState 已标记 SUCCEEDED，但 TaskResult 持久化异常缺失”的极小 Crash Window：
+- 调度器遍历全图所有状态为 `SUCCEEDED` 的节点；
+- 检查其 `resultPath` 与 `.aire/tasks/<taskId>/result.json` 是否真实有效存在；
+- 若文件缺失，调度器依据该任务的 `baseCommit` 与 `commit` 自动通过 `extractChangedFiles` 重新提取代码差异，调用 `ArtifactManager.reconstructTaskResult` 幂等重建并持久化 `result.json`，确保下游读取直接依赖契约时 100% 完整可用！
+
+#### Step 4: 修复后重试（`--retry-task <taskId>`）状态重算
 当用户修复代码或前置问题后发起 `--retry-task <taskId>`：
 1. 校验目标 `taskId` 是否处于 `FAILED` 状态；
 2. **严格重置为 `PENDING`**：
@@ -461,7 +475,8 @@ export function buildDagTaskPrompt(
   - 验证全图在无就绪节点后终止为 `HALTED`。
 - `tests/integration/dag-crash-recovery.test.ts`:
   - 场景 1：模拟执行中崩溃（状态为 `RUNNING`，`HEAD === baseCommit`），验证 Resume 自动重置并从 `baseCommit` 重新安全执行；
-  - 场景 2：模拟 Commit 完成后但 RunState 写入前崩溃（`HEAD !== baseCommit`），验证 Resume 通过 Git Trailer `AIRE-Task-Id` 机器可验证并校准为 `SUCCEEDED`，补全 `TaskResult`。
+  - 场景 2：模拟 Commit 完成后但 RunState 写入前崩溃（`HEAD !== baseCommit`），验证 Resume 通过 Git Trailer `AIRE-Task-Id` 机器可验证并校准为 `SUCCEEDED`，补全 `TaskResult`；
+  - 场景 3：模拟 RunState 已标记 `SUCCEEDED` 但 `TaskResult` 写入前崩溃/文件缺失，验证 Resume 自动执行幂等重建并补全保存 `result.json`，下游任务顺利消费依赖契约。
 
 ### 6.3 Layer 3: 端到端 CLI 验证（E2E）
 - `tests/e2e/dag-cli.test.ts`:
