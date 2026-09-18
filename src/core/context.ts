@@ -1,4 +1,11 @@
-import type { TaskContext, TaskHistoryItem } from './types.ts';
+import type {
+  TaskContext,
+  TaskHistoryItem,
+  VisualReplicaConfig,
+  VisualToleranceMatrix,
+} from './types.ts';
+
+export type { VisualToleranceMatrix, VisualReplicaConfig, TaskContext };
 
 export interface CreateTaskOptions {
   taskId: string;
@@ -6,18 +13,20 @@ export interface CreateTaskOptions {
   scheme: string;
   taskGoal: string;
   maxRetries?: number;
+  visualConfig?: VisualReplicaConfig;
 }
 
-export function createTaskContext(options: CreateTaskOptions): TaskContext {
+export function createTaskContext(params: CreateTaskOptions): TaskContext {
   return {
-    taskId: options.taskId,
-    projectPath: options.projectPath,
-    scheme: options.scheme,
-    taskGoal: options.taskGoal,
-    maxRetries: options.maxRetries ?? 3,
+    taskId: params.taskId,
+    projectPath: params.projectPath,
+    scheme: params.scheme,
+    taskGoal: params.taskGoal,
+    maxRetries: params.maxRetries ?? 3,
     currentRetry: 0,
     state: 'IDLE',
-    history: []
+    visualConfig: params.visualConfig,
+    history: [],
   };
 }
 

@@ -36,4 +36,28 @@ describe('TaskContext', () => {
     assert.equal(ctx.history[0].iteration, 1);
     assert.equal(ctx.history[0].action, 'INITIAL_PROMPT');
   });
+
+  test('TaskContext initializes with visual configuration and default tolerance matrix', () => {
+    const ctx = createTaskContext({
+      taskId: 'visual-task-1',
+      projectPath: '/tmp/test-project',
+      scheme: 'MiniApp',
+      taskGoal: 'Replicate home card',
+      visualConfig: {
+        referenceImagePath: '/tmp/ref.png',
+        focusAreas: 'Header card and title',
+        toleranceMatrix: {
+          containerDeltaMax: 7.0,
+          spacingPtMax: 2.0,
+          textDeltaMax: 15.0,
+        },
+      },
+    });
+
+    assert.equal(ctx.visualConfig?.referenceImagePath, '/tmp/ref.png');
+    assert.equal(ctx.visualConfig?.focusAreas, 'Header card and title');
+    assert.equal(ctx.visualConfig?.toleranceMatrix.containerDeltaMax, 7.0);
+    assert.equal(ctx.visualConfig?.toleranceMatrix.spacingPtMax, 2.0);
+    assert.equal(ctx.visualConfig?.toleranceMatrix.textDeltaMax, 15.0);
+  });
 });
