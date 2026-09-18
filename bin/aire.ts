@@ -14,8 +14,60 @@ import { TaskGraph } from '../src/dag/task-graph.ts';
 import { SerialDagScheduler } from '../src/dag/serial-dag-scheduler.ts';
 import { TaskRunner } from '../src/dag/task-runner.ts';
 import type { TaskNode, DagExecutionReport } from '../src/dag/types.ts';
+import { PlannerOrchestrator } from '../src/planner/planner-orchestrator.ts';
 
 const program = new Command();
+
+function createCliTaskRunner(): TaskRunner | undefined {
+  if (process.env.AIRE_MOCK_RUNNER === '1' || process.env.AIRE_MOCK_RUNNER === 'true') {
+    const mockCli: ICliAdapter = {
+      name: 'MockCliAdapter',
+      async isAvailable() {
+        return true;
+      },
+      async execute(params: CliExecuteParams): Promise<CliExecutionResult> {
+        const allowedFilesSection = params.prompt.match(
+          /- \*\*允许修改的文件清单（Allowed Files）\*\*:\n((?:\s+- `[^`]+`\n?)+)/
+        );
+        if (allowedFilesSection) {
+          const files = [...allowedFilesSection[1].matchAll(/- `([^`]+)`/g)].map((m) => m[1]);
+          for (const relFile of files) {
+            if (relFile === '(无限制)') continue;
+            const fullPath = resolve(params.cwd, relFile);
+            await fs.mkdir(dirname(fullPath), { recursive: true });
+            await fs.writeFile(
+              fullPath,
+              `// Auto-generated mock implementation\n`,
+              'utf-8'
+            );
+          }
+        }
+        return {
+          exitCode: 0,
+          stdout: 'Mock execution succeeded',
+          stderr: '',
+          durationMs: 10,
+        };
+      },
+    };
+
+    const mockEvaluatorFactory = (task: TaskNode): IEvaluator => ({
+      name: 'MockEvaluator',
+      evaluate: async () => ({
+        passed: true,
+        type: 'BUILD',
+        summary: `Mock evaluation passed for ${task.id}`,
+        errors: [],
+      }),
+    });
+
+    return new TaskRunner({
+      cliAdapter: mockCli,
+      evaluatorFactory: mockEvaluatorFactory,
+    });
+  }
+  return undefined;
+}
 
 program
   .name('aire')
@@ -58,54 +110,7 @@ program
         ? resolve(process.cwd(), options.project)
         : (taskGraphPath ? dirname(taskGraphPath) : process.cwd());
 
-      let taskRunner: TaskRunner | undefined;
-      if (process.env.AIRE_MOCK_RUNNER === '1' || process.env.AIRE_MOCK_RUNNER === 'true') {
-        const mockCli: ICliAdapter = {
-          name: 'MockCliAdapter',
-          async isAvailable() {
-            return true;
-          },
-          async execute(params: CliExecuteParams): Promise<CliExecutionResult> {
-            const allowedFilesSection = params.prompt.match(
-              /- \*\*允许修改的文件清单（Allowed Files）\*\*:\n((?:\s+- `[^`]+`\n?)+)/
-            );
-            if (allowedFilesSection) {
-              const files = [...allowedFilesSection[1].matchAll(/- `([^`]+)`/g)].map((m) => m[1]);
-              for (const relFile of files) {
-                if (relFile === '(无限制)') continue;
-                const fullPath = resolve(params.cwd, relFile);
-                await fs.mkdir(dirname(fullPath), { recursive: true });
-                await fs.writeFile(
-                  fullPath,
-                  `// Auto-generated mock implementation\n`,
-                  'utf-8'
-                );
-              }
-            }
-            return {
-              exitCode: 0,
-              stdout: 'Mock execution succeeded',
-              stderr: '',
-              durationMs: 10,
-            };
-          },
-        };
-
-        const mockEvaluatorFactory = (task: TaskNode): IEvaluator => ({
-          name: 'MockEvaluator',
-          evaluate: async () => ({
-            passed: true,
-            type: 'BUILD',
-            summary: `Mock evaluation passed for ${task.id}`,
-            errors: [],
-          }),
-        });
-
-        taskRunner = new TaskRunner({
-          cliAdapter: mockCli,
-          evaluatorFactory: mockEvaluatorFactory,
-        });
-      }
+      const taskRunner = createCliTaskRunner();
 
       try {
         let report: DagExecutionReport;
@@ -253,6 +258,103 @@ program
       process.exit(0);
     } else {
       console.error(`\n❌ [AIRE] Task FAILED after ${finalContext.currentRetry} retries.`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('plan')
+  .description('Analyze inputs and generate a validated task-graph.yaml using upstream Multi-Agent Planner')
+  .option('-p, --project <path>', 'Path to target iOS project directory')
+  .option('-n, --app-name <name>', 'Application name', 'App')
+  .option('-s, --scheme <scheme>', 'Target Xcode scheme name')
+  .option('-r, --reference <path>', 'Path to reference screenshot file or directory')
+  .option('--prd <path>', 'Path to product requirements document (PRD) markdown file')
+  .option('-o, --output <path>', 'Output path for task-graph.yaml')
+  .option('--auto-run', 'Automatically execute the generated task graph after planning')
+  .action(async (options) => {
+    const projectPath = options.project ? resolve(process.cwd(), options.project) : process.cwd();
+    const appName = options.appName ?? 'App';
+    const targetScheme = options.scheme ?? appName;
+    const outputPath = options.output
+      ? resolve(process.cwd(), options.output)
+      : resolve(projectPath, 'task-graph.yaml');
+
+    console.log('🔮 [AIRE Plan] Starting Upstream Multi-Agent Analysis Pipeline...');
+    console.log(`📁 Project: ${projectPath}`);
+    console.log(`📱 App: ${appName} (Scheme: ${targetScheme})`);
+    if (options.reference) console.log(`🎨 Reference: ${options.reference}`);
+    if (options.prd) console.log(`📄 PRD: ${options.prd}`);
+    console.log(`📝 Output: ${outputPath}`);
+
+    try {
+      const orchestrator = new PlannerOrchestrator();
+      const planResult = await orchestrator.plan({
+        appName,
+        targetScheme,
+        projectPath,
+        referenceFile: options.reference && options.reference.endsWith('.png') ? resolve(process.cwd(), options.reference) : undefined,
+        referenceDir: options.reference && !options.reference.endsWith('.png') ? resolve(process.cwd(), options.reference) : undefined,
+        prdFile: options.prd ? resolve(process.cwd(), options.prd) : undefined,
+        outputPath,
+        exportMarkdown: true,
+      });
+
+      console.log('\n✅ [AIRE Plan] Upstream Planning Succeeded!');
+      console.log(`📄 Machine Truth: ${planResult.irPath}`);
+      console.log(`📑 Human Specs: ${planResult.specPaths.join(', ')}`);
+      console.log(`🗺️ Task Graph: ${planResult.outputPath} (${planResult.config.tasks.length} tasks)`);
+
+      for (const task of planResult.config.tasks) {
+        const deps = task.dependencies.length > 0 ? ` (depends on: ${task.dependencies.join(', ')})` : ' (root)';
+        console.log(`  - [${task.id}] ${task.title}${deps}`);
+      }
+
+      if (options.autoRun) {
+        console.log('\n🚀 [AIRE Plan] --auto-run enabled. Handing off to SerialDagScheduler...');
+
+        // If running in a git repo, commit the generated plan and spec files cleanly so the workspace has a clean base snapshot
+        try {
+          const { execFile } = await import('node:child_process');
+          const { promisify } = await import('node:util');
+          const execFileAsync = promisify(execFile);
+          const { stdout: gitStatus } = await execFileAsync('git', ['status', '--porcelain'], { cwd: projectPath });
+          if (gitStatus.trim().length > 0) {
+            await execFileAsync('git', ['add', '-A'], { cwd: projectPath });
+            await execFileAsync('git', ['commit', '-m', 'chore(plan): save generated task graph and specifications'], { cwd: projectPath });
+          }
+        } catch {
+          // Graceful fallback if git is uninitialized
+        }
+
+        const taskRunner = createCliTaskRunner();
+        const taskGraph = TaskGraph.fromYaml(planResult.yamlContent);
+        const scheduler = new SerialDagScheduler({
+          taskRunner,
+          graphPath: planResult.outputPath,
+          rawYamlContent: planResult.yamlContent,
+        });
+        const report = await scheduler.run(taskGraph, { projectPath });
+        if (report.status === 'SUCCEEDED') {
+          console.log('\n🎉 [AIRE Plan] Auto-run completed successfully!');
+          process.exit(0);
+        } else {
+          console.error(`\n❌ [AIRE Plan] Auto-run ended with status: ${report.status}`);
+          process.exit(1);
+        }
+      } else {
+        console.log('\n💡 Next step: Run the generated plan with:');
+        console.log(`   aire run --task-graph ${planResult.outputPath}`);
+        process.exit(0);
+      }
+    } catch (err: any) {
+      console.error(`\n❌ [AIRE Plan] Planning failed: ${err.message}`);
+      if (err.diagnostics) {
+        console.error('Validation diagnostics:');
+        for (const diag of err.diagnostics) {
+          console.error(`  - [${diag.severity.toUpperCase()}] ${diag.rule}: ${diag.message}`);
+        }
+      }
       process.exit(1);
     }
   });
