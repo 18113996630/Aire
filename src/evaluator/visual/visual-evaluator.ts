@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { IEvaluator } from '../evaluator.interface.ts';
 import type { TaskContext, EvaluationResult, VisualDefect } from '../../core/types.ts';
@@ -35,6 +36,11 @@ export class VisualReviewEvaluator implements IEvaluator {
     }
 
     const artifactDir = path.resolve(context.projectPath, '.aire/artifacts');
+    try {
+      await fs.mkdir(artifactDir, { recursive: true });
+    } catch {
+      // 容错：测试环境或虚拟路径下创建目录失败时不中断评审流程
+    }
     const screenshotPath = path.join(artifactDir, 'simulator-shot.png');
     const probesPath = path.join(artifactDir, 'probes.json');
     context.capturedScreenshotPath = screenshotPath;

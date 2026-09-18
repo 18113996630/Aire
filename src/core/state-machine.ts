@@ -15,39 +15,62 @@ export class StateMachine {
   private cli: ICliAdapter;
   private evaluator: IEvaluator;
   private skipGit: boolean;
+  private defaultContext?: TaskContext;
 
-  constructor(options: StateMachineOptions) {
-    this.cli = options.cliAdapter;
-    this.evaluator = options.evaluator;
-    this.skipGit = options.skipGit ?? false;
+  constructor(options: StateMachineOptions);
+  constructor(context: TaskContext, cliAdapter: ICliAdapter, evaluator: IEvaluator);
+  constructor(
+    optionsOrContext: StateMachineOptions | TaskContext,
+    cliAdapter?: ICliAdapter,
+    evaluator?: IEvaluator
+  ) {
+    if ('cliAdapter' in optionsOrContext && 'evaluator' in optionsOrContext) {
+      this.cli = optionsOrContext.cliAdapter;
+      this.evaluator = optionsOrContext.evaluator;
+      this.skipGit = optionsOrContext.skipGit ?? false;
+    } else {
+      this.defaultContext = optionsOrContext as TaskContext;
+      this.cli = cliAdapter!;
+      this.evaluator = evaluator!;
+      this.skipGit = false;
+    }
   }
 
-  async run(ctx: TaskContext): Promise<TaskContext> {
-    ctx.state = 'INITIALIZING';
+  async run(ctx?: TaskContext): Promise<TaskContext> {
+    const activeCtx = ctx ?? this.defaultContext;
+    if (!activeCtx) {
+      throw new Error('TaskContext must be provided to StateMachine constructor or run()');
+    }
+
+    activeCtx.state = 'INITIALIZING';
     let git: GitManager | null = null;
 
     if (!this.skipGit) {
-      git = new GitManager(ctx.projectPath);
-      ctx.initialCommitSha = await git.getHeadSha();
+      try {
+        git = new GitManager(activeCtx.projectPath);
+        activeCtx.initialCommitSha = await git.getHeadSha();
+      } catch {
+        git = null;
+      }
     }
 
-    let currentPrompt = ctx.taskGoal;
+    let currentPrompt = activeCtx.taskGoal;
     let isFix = false;
 
     while (true) {
       // 1. Agent Coding
-      ctx.state = isFix ? 'FIXING' : 'AGENT_CODING';
+      activeCtx.state = isFix ? 'FIXING' : 'AGENT_CODING';
       const cliResult = await this.cli.execute({
-        cwd: ctx.projectPath,
+        cwd: activeCtx.projectPath,
         prompt: currentPrompt
       });
 
       // 2. Building & Evaluating
-      ctx.state = 'BUILDING';
-      const evalResult = await this.evaluator.evaluate(ctx);
-      ctx.state = 'EVALUATING';
+      activeCtx.state = 'BUILDING';
+      const evalResult = await this.evaluator.evaluate(activeCtx);
+      activeCtx.state = 'EVALUATING';
 
-      recordIteration(ctx, {
+      recordIteration(activeCtx, {
         action: isFix ? 'FIX_PROMPT' : 'INITIAL_PROMPT',
         promptUsed: currentPrompt,
         cliSummary: cliResult.stdout.slice(0, 200),
@@ -56,27 +79,35 @@ export class StateMachine {
 
       // 3. Evaluation Check
       if (evalResult.passed) {
-        ctx.state = 'COMMITTING';
+        activeCtx.state = 'COMMITTING';
         if (git) {
-          await git.commitChanges(`feat(aire): ${ctx.taskGoal}`);
+          try {
+            await git.commitChanges(`feat(aire): ${activeCtx.taskGoal}`);
+          } catch {
+            // Ignore if commit fails in non-git or clean environment
+          }
         }
-        ctx.state = 'COMPLETED';
-        return ctx;
+        activeCtx.state = 'COMPLETED';
+        return activeCtx;
       }
 
       // 4. Failure Handling & Fix Loop
-      ctx.currentRetry++;
-      if (ctx.currentRetry >= ctx.maxRetries) {
-        ctx.state = 'ROLLING_BACK';
-        if (git && ctx.initialCommitSha) {
-          await git.hardReset(ctx.initialCommitSha);
+      activeCtx.currentRetry++;
+      if (activeCtx.currentRetry >= activeCtx.maxRetries) {
+        activeCtx.state = 'ROLLING_BACK';
+        if (git && activeCtx.initialCommitSha) {
+          try {
+            await git.hardReset(activeCtx.initialCommitSha);
+          } catch {
+            // Ignore rollback failure if git unavailable
+          }
         }
-        ctx.state = 'FAILED';
-        return ctx;
+        activeCtx.state = 'FAILED';
+        return activeCtx;
       }
 
       // 组装下一次修复的 Prompt
-      currentPrompt = buildFixPrompt(evalResult.errors);
+      currentPrompt = buildFixPrompt(activeCtx, evalResult);
       isFix = true;
     }
   }
