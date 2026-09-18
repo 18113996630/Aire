@@ -84,7 +84,15 @@ export class SerialDagScheduler implements IScheduler {
     if (this.rawYamlContent) {
       graphHash = this.runStateStore.computeGraphHash(this.rawYamlContent);
     } else {
-      graphHash = this.runStateStore.computeGraphHash(YAML.stringify(graph.config));
+      const resolvedGraphPath = path.isAbsolute(graphPath)
+        ? graphPath
+        : path.resolve(projectPath, graphPath);
+      try {
+        const diskContent = await fs.readFile(resolvedGraphPath, 'utf-8');
+        graphHash = this.runStateStore.computeGraphHash(diskContent);
+      } catch {
+        graphHash = this.runStateStore.computeGraphHash(YAML.stringify(graph.config));
+      }
     }
 
     const tasks: Record<string, TaskRunRecord> = {};
@@ -130,8 +138,11 @@ export class SerialDagScheduler implements IScheduler {
     if (!yamlContent) {
       const targetGraphPath = this.graphPath ?? runState.graphPath;
       if (targetGraphPath) {
+        const resolvedPath = path.isAbsolute(targetGraphPath)
+          ? targetGraphPath
+          : path.resolve(projectPath, targetGraphPath);
         try {
-          yamlContent = await fs.readFile(targetGraphPath, 'utf-8');
+          yamlContent = await fs.readFile(resolvedPath, 'utf-8');
         } catch {
           // File might not exist
         }
@@ -358,6 +369,9 @@ export class SerialDagScheduler implements IScheduler {
       // State change callback hook for real-time WAL persistence
       const onStateChange = async (status: TaskExecutionStatus) => {
         taskRecord.status = status;
+        if (status === 'RETRYING') {
+          taskRecord.retryCount++;
+        }
         runState.updatedAt = new Date().toISOString();
         await this.runStateStore.saveRunState(projectPath, runState);
       };

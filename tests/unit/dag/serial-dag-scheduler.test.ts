@@ -1,11 +1,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import {
   SerialDagScheduler,
   WorkspaceInconsistentError
 } from '../../../src/dag/serial-dag-scheduler.ts';
 import { TaskGraph } from '../../../src/dag/task-graph.ts';
-import { GraphDriftError } from '../../../src/dag/run-state-store.ts';
+import { RunStateStore, GraphDriftError } from '../../../src/dag/run-state-store.ts';
 import { CascadeExecutionPolicy } from '../../../src/dag/cascade-execution-policy.ts';
 import type {
   TaskNode,
@@ -564,4 +567,90 @@ tasks:
       assert.equal(reconciled.commit, 'c1');
     });
   });
+
+  test('Case 6: run() reads graphPath from disk to compute graphHash matching resume() without rawYamlContent', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aire-hash-test-'));
+    try {
+      const yamlWithComments = `# Important project configuration\nversion: "1.0.0"\n# Project details\nproject:\n  name: "HashTest"\n  targetScheme: "App"\ntasks:\n  - id: "task-a"\n    title: "Task A"\n    goal: "Goal A"\n    role: "iOS Developer"\n    dependencies: []\n    allowed_files: ["A.swift"]\n    acceptance_criteria: ["A works"]\n`;
+      const graphFile = path.join(tmpDir, 'task-graph.yaml');
+      await fs.writeFile(graphFile, yamlWithComments, 'utf-8');
+
+      const graph = TaskGraph.fromYaml(yamlWithComments);
+      const realStore = new RunStateStore();
+      const workspaceStrategy = createMockWorkspaceStrategy();
+      const artifactManager = createMockArtifactManager();
+      const taskRunner = createMockTaskRunner({
+        'task-a': { success: true },
+      });
+
+      // No rawYamlContent passed - scheduler should read task-graph.yaml from disk
+      const scheduler = new SerialDagScheduler({
+        workspaceStrategy,
+        runStateStore: realStore,
+        artifactManager,
+        taskRunner,
+        graphPath: graphFile,
+      });
+
+      const report = await scheduler.run(graph, { projectPath: tmpDir });
+      assert.equal(report.status, 'SUCCEEDED');
+
+      // Now resume without rawYamlContent - should NOT throw GraphDriftError
+      const resumeScheduler = new SerialDagScheduler({
+        workspaceStrategy,
+        runStateStore: realStore,
+        artifactManager,
+        taskRunner,
+        graphPath: graphFile,
+      });
+
+      const resumeReport = await resumeScheduler.resume(tmpDir);
+      assert.equal(resumeReport.status, 'SUCCEEDED');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('Case 7: onStateChange increments taskRecord.retryCount when status is RETRYING', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    const workspaceStrategy = createMockWorkspaceStrategy();
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+
+    const customRunner: ITaskRunner = {
+      async executeTask(
+        task,
+        _projectPath,
+        _runId,
+        _dependencyResults,
+        baseCommit,
+        onStateChange
+      ): Promise<TaskExecutionOutcome> {
+        await onStateChange('RUNNING');
+        await onStateChange('VERIFYING');
+        await onStateChange('REPAIRING');
+        await onStateChange('RETRYING'); // triggers retryCount increment
+        return {
+          success: true,
+          taskId: task.id,
+          baseCommit,
+        };
+      },
+    };
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner: customRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    await scheduler.run(graph, { projectPath: '/mock/project' });
+
+    assert.ok(runStateStore.state);
+    // Task A had RETRYING emitted once, so retryCount must be 1
+    assert.equal(runStateStore.state.tasks['task-a'].retryCount, 1);
+  });
 });
+
