@@ -22,7 +22,7 @@
 
 ### 1.2 非目标（Non-goals）
 - 本阶段**不引入**外部重量级工作流引擎或分布式数据库（如 Temporal、Kafka、SQLite），保持纯 Node.js / TypeScript 极简嵌入式运行；
-- 本阶段**不实现**基于 Git Worktree 的全自动并行冲突合并算法，执行模型采用严格拓扑串行（`concurrency = 1`），但通过抽象稳定接口（`IWorkspaceStrategy`）为多工作区并发预留无缝扩展点；
+- 本阶段**不实现**基于 Git Worktree 的全自动并行冲突合并算法，执行模型采用严格拓扑串行（`maxConcurrency = 1`），但通过抽象稳定接口（`IWorkspaceStrategy`）为多工作区并发预留无缝扩展点；
 - 本阶段**不实现**上游自动由 PRD/截图逆向生成任务图的 AI 分析 Agent（规划至 Sub-project 4），专注于任务图的高可靠调度与容错执行引擎。
 
 ### 1.3 验收条件（Acceptance Criteria）
@@ -36,17 +36,18 @@
    - 任务重试耗尽自愈失败后，工作区原子硬重置回该任务的 `baseCommit`；
    - 仅将失败任务的所有直接/间接下游子孙节点标记为 `BLOCKED`；
    - **完全不影响互不依赖的独立平行分支继续执行**；
-   - 仅当全图再无可运行节点时，全局状态才置为 `HALTED` / `FAILED`。
+   - 仅当全图再无可运行节点时，调度器评估全局终态：若全部节点为 `SUCCEEDED` 则 Run 为 `SUCCEEDED`；若存在 `FAILED` 或 `BLOCKED` 则 Run 标记为 `HALTED`。
 4. **防漂移断点续跑（Drift-Safe Resume & Crash Recovery）**：
-   - 全局运行状态与崩溃恢复以 `.aire/run-state.json` 为唯一法定源，记录 `graphHash`, `graphVersion`, `schemaVersion`；
-   - 状态持久化严格遵循 Write-Ahead Logging (WAL) 时序，并在恢复时通过 `baseCommit`、`commit` 与 Git HEAD 比对进行一致性校准；
-   - 支持通过 `--retry-task <id>` 重置失败节点，重置后自动依 DAG 重算就绪态，杜绝多依赖节点的早熟执行。
+   - 全局运行状态与崩溃恢复以 `.aire/run-state.json` 为唯一法定源，记录 `graphHash`, `graphVersion`, `schemaVersion`，并内置 Schema 升级迁移拦截机制；
+   - 状态持久化遵循 **WAL 风格严格时序（WAL-style Persistence Ordering）** 与 **原子文件替换（Atomic Temp-Rename）** 机制；
+   - Commit Message 注入机器可验证的 Git Trailer（`AIRE-Run-Id`, `AIRE-Task-Id`, `AIRE-Base-Commit`），使 Crash Recovery 能够可靠校准提交事实，杜绝重复提交与错误回滚；
+   - 支持通过 `--retry-task <id>` 重置失败节点，重置时将该节点与受阻下游统一置为 `PENDING`，并通过 DAG 重新严格推导就绪态，杜绝多依赖节点的早熟执行。
 5. **结构化契约与产物交接（Structured Artifact Hand-Off）**：
    - Git 工作区源码是唯一真相源，每个成功任务通过 `IArtifactManager` 持久化 `.aire/tasks/<taskId>/result.json` 作为“索引雷达”；
    - 下游任务 Prompt 仅挂载**直接前置依赖**的 `TaskResult`（摘要、变更文件、API 契约、文档产物路径），严格控制上下文规模。
 6. **完备的三层测试金字塔**：
    - Layer 1 单元测试（YAML 解析、拓扑排序、环检测、防漂移校验、就绪状态推导、Prompt 注入）；
-   - Layer 2 集成测试（菱形依赖全链路、分支失败隔离与级联阻断、崩溃恢复与 Commit 校准、修复后重试）；
+   - Layer 2 集成测试（菱形依赖全链路、分支失败隔离与级联阻断、崩溃恢复双场景与 Commit Trailer 校准、修复后重试）；
    - Layer 3 E2E 测试（CLI `--task-graph` 完整驱动 MiniApp 靶场）。
 
 ---
@@ -94,8 +95,7 @@
 ```typescript
 export interface SchedulerOptions {
   projectPath: string;
-  maxConcurrency?: number;   // 阶段三固定为 1
-  concurrency?: number;
+  maxConcurrency?: number;   // 阶段三默认固定为 1，接口层面完全支持未来横向扩展
   retryTaskId?: string;
 }
 
@@ -121,29 +121,37 @@ export interface IScheduler {
 export interface WorkspaceContext {
   projectPath: string;
   taskId: string;
+  runId: string;
   allowedFiles: string[];
+}
+
+export interface CommitMetadata {
+  runId: string;
+  taskId: string;
+  baseCommit: string;
+  title: string;
 }
 
 export interface IWorkspaceStrategy {
   prepareWorkspace(ctx: WorkspaceContext): Promise<void>;
   captureSnapshot(ctx: WorkspaceContext): Promise<string>; // 返回 baseCommit
   rollbackWorkspace(ctx: WorkspaceContext, baseCommit: string): Promise<void>;
-  commitTaskWorkspace(ctx: WorkspaceContext, message: string): Promise<string>; // 返回 new commit
+  commitTaskWorkspace(ctx: WorkspaceContext, meta: CommitMetadata): Promise<string>; // 返回 new commit (注入 Trailer)
   extractChangedFiles(ctx: WorkspaceContext, baseCommit: string): Promise<string[]>;
+  verifyCommitBelongsToTask(projectPath: string, commitSha: string, taskId: string, runId: string): Promise<boolean>;
   cleanupWorkspace(ctx: WorkspaceContext): Promise<void>;
 }
 ```
 
 #### 2.2.3 执行决策策略接口（`IExecutionPolicy`）
-仅输出决策枚举，不直接改动图状态，由 `Scheduler` 统一实施单点状态跃迁：
+仅负责失败决策，不负责状态修改，保持策略的纯粹性：
 ```typescript
 export enum FailureDecision {
-  CASCADE_BLOCK_AND_CONTINUE = 'CASCADE_BLOCK_AND_CONTINUE', // 阻断子孙节点，允许无关分支继续
+  CASCADE_BLOCK_AND_CONTINUE = 'CASCADE_BLOCK_AND_CONTINUE', // 阻断子孙节点，允许无关平行分支继续
   ABORT_ALL = 'ABORT_ALL',                                   // 紧急全盘中断
 }
 
 export interface IExecutionPolicy {
-  onTaskSuccess(task: TaskNode, result: TaskResult, graph: TaskGraph): void;
   onTaskFailure(task: TaskNode, error: TaskError, graph: TaskGraph): FailureDecision;
 }
 ```
@@ -157,10 +165,10 @@ export interface IArtifactManager {
   getDirectDependencyResults(projectPath: string, dependencyIds: string[]): Promise<TaskResult[]>;
 }
 
-// 2. 全局运行状态与断点恢复存储器
+// 2. 全局运行状态与断点恢复存储器（含 Schema 迁移机制与原子落盘契约）
 export interface IRunStateStore {
-  saveRunState(projectPath: string, state: DagRunState): Promise<void>;
-  loadRunState(projectPath: string): Promise<DagRunState | null>;
+  saveRunState(projectPath: string, state: DagRunState): Promise<void>; // 必须使用 write temp -> fsync -> rename 原子替换
+  loadRunState(projectPath: string): Promise<DagRunState | null>;       // 自动检测 schemaVersion 并执行向上迁移
   computeGraphHash(rawYamlContent: string): string;
 }
 ```
@@ -172,6 +180,7 @@ export interface ITaskRunner {
   executeTask(
     task: TaskNode,
     projectPath: string,
+    runId: string,
     dependencyResults: TaskResult[],
     baseCommit: string,
     onStateChange: (status: TaskExecutionStatus) => Promise<void>
@@ -254,13 +263,13 @@ export interface TaskRunRecord {
 }
 
 export interface DagRunState {
-  schemaVersion: '1.0';
+  schemaVersion: string;         // 如 "1.0.0"，用于 Schema Migration 检验
   graphVersion: string;
   graphHash: string;             // task-graph.yaml 的 SHA-256 哈希防漂移
   runId: string;
   graphPath: string;
   status: 'RUNNING' | 'SUCCEEDED' | 'HALTED' | 'FAILED';
-  activeTaskId: string | null;
+  activeTaskIds: string[];       // 预留数组语义，阶段三永远至多 1 个元素
   startedAt: string;
   updatedAt: string;
   tasks: Record<string, TaskRunRecord>;
@@ -309,52 +318,91 @@ function computeReadyTasks(graph: TaskGraph, records: Record<string, TaskRunReco
 }
 ```
 
-### 4.3 任务执行生命周期与 WAL 持久化时序
-为了防止断电或进程中断产生“代码已提交但 RunState 未记录”的不一致窗口，执行必须遵循严格时序：
+### 4.3 任务执行生命周期与 WAL 风格严格持久化时序（WAL-style Persistence Ordering）
+
+所有状态写入必须经由 `IRunStateStore.saveRunState()` 的原子操作：
+`写入临时文件 .aire/run-state.json.tmp -> fsync -> 原子 rename 替换 .aire/run-state.json`。
+
+主循环调度与持久化时序：
 
 ```text
-1. 选取 READY 节点
+1. 评估全图可运行任务：
+   computeReadyTasks()
        │
-2. WorkspaceStrategy 捕获当前 HEAD commit 作为 baseCommit
-       │
-3. 【WAL 持久化】RunState 更新为 RUNNING，写入 baseCommit 并存盘
-       │
-4. TaskRunner 驱动 StateMachine 执行（编码 -> 编译 -> 视觉质检 -> 自愈循环）
-       │
-   ├── 验证失败（耗尽重试）：
-   │     1. WorkspaceStrategy 强制回滚：git reset --hard <baseCommit>
-   │     2. ExecutionPolicy 返回 CASCADE_BLOCK_AND_CONTINUE
-   │     3. 【WAL 持久化】当前任务更新为 FAILED
-   │     4. 调度器遍历所有直接/间接下游子孙节点，统一步迁为 BLOCKED (blockedBy: taskId)
-   │     5. 【WAL 持久化】保存更新后的任务状态清单
-   │     6. 调度器检查是否还有其他独立平行分支处于 READY 或 PENDING：
-   │          - 若有：主循环继续驱动独立分支！
-   │          - 若无：全图无就绪节点，RunState 标记为 HALTED 并退出
+   ├── 若存在 READY 节点：取出下一个节点并执行
    │
-   └── 验证成功：
-         1. WorkspaceStrategy 提交工作区：git commit -m "feat(<taskId>): <title>"
-         2. 获取产生的最新 commit sha
-         3. 【WAL 持久化】RunState 更新为 SUCCEEDED，写入 commit 并存盘
-         4. WorkspaceStrategy 提取变更文件清单 (git diff --name-only baseCommit..commit)
-         5. 构造 TaskResult 并通过 ArtifactManager 持久化至 .aire/tasks/<taskId>/result.json
-         6. 调度器重新评估全图就绪节点（computeReadyTasks），解锁下游任务
+   └── 若不存在任何 READY 节点（无可运行节点）：
+         ├── 全图所有任务均为 SUCCEEDED：
+         │     RunState.status = 'SUCCEEDED'，保存状态并正常成功退出！
+         │
+         └── 全图存在 FAILED 或 BLOCKED 节点：
+               RunState.status = 'HALTED'，保存状态并输出阻断报告退出。
+
+2. 针对选出的 READY 节点执行：
+   a. WorkspaceStrategy 捕获当前 HEAD commit 作为 baseCommit
+   b. 【原子持久化】RunState 更新：
+        activeTaskIds = [taskId], task.status = 'RUNNING', task.baseCommit = baseCommit
+   c. TaskRunner 动态组装 EvaluatorPipeline 并驱动 StateMachine 执行
+        （状态流转 VERIFYING / REPAIRING / RETRYING 均实时原子刷盘）
+   d. 执行分支判定：
+      ├── 验证失败（耗尽重试）：
+      │     1. WorkspaceStrategy 强制回滚：git reset --hard <baseCommit>
+      │     2. ExecutionPolicy.onTaskFailure() 返回 CASCADE_BLOCK_AND_CONTINUE
+      │     3. 当前任务标记为 FAILED
+      │     4. 调度器遍历该任务所有直接/间接下游子孙节点，统一步迁为 BLOCKED (blockedBy: taskId)
+      │     5. 【原子持久化】清空 activeTaskIds，落盘更新后的状态清单
+      │     6. 调度器继续回到步骤 1（如果存在独立平行分支，继续调度执行！）
+      │
+      └── 验证成功：
+            1. WorkspaceStrategy 提交工作区并注入 Git Trailer：
+               git commit -m "feat(<taskId>): <title>
+
+               AIRE-Run-Id: <runId>
+               AIRE-Task-Id: <taskId>
+               AIRE-Base-Commit: <baseCommit>"
+            2. 获取最新 commit sha
+            3. 【原子持久化】清空 activeTaskIds，task.status = 'SUCCEEDED', task.commit = commit
+            4. WorkspaceStrategy 提取变更文件 (git diff --name-only baseCommit..commit)
+            5. 构造 TaskResult 并持久化至 .aire/tasks/<taskId>/result.json
+            6. 调度器回到步骤 1，重新通过 computeReadyTasks() 激活下游就绪任务
 ```
 
-### 4.4 防漂移断点续跑与状态校准（Resume & State Calibration）
+### 4.4 机器可验证的 Crash Recovery 与防漂移断点续跑
 
-当运行 `aire run --task-graph <path> --resume`：
-1. **防漂移哈希检查**：
-   - 读取指定 YAML 文件的 SHA-256；
-   - 比对 `run-state.json` 中的 `graphHash` 与 `graphVersion`。若不一致，抛出 `GraphDriftError` 并提示用户不可直接 Resume。
-2. **崩溃校准（Crash Calibration）**：
-   - 检查 RunState 中是否存在残留的运行态（`RUNNING / VERIFYING / REPAIRING / RETRYING`）；
-   - 比对当前 Git 仓库的 `HEAD` 与该任务记录的 `baseCommit`：
-     - 若 `HEAD === baseCommit`：说明中断发生在提交前，工作区调用 `rollbackWorkspace` 清理任何未跟踪脏文件，任务状态重置为 `READY`；
-     - 若 `HEAD !== baseCommit` 且最新 Commit 属于该任务：说明中断发生在提交后但 RunState 尚未写入，调度器自动校准补全状态为 `SUCCEEDED`，提取变更文件并补全 `TaskResult`，避免重复提交或错误回滚！
-3. **修复后任务重试（`--retry-task <taskId>`）**：
-   - 将指定的 `FAILED` 节点重置为 `READY`；
+当运行 `aire run --task-graph <path> --resume` 时，调度器严格执行三步校准：
+
+#### Step 1: 防漂移与 Schema 迁移校验
+1. **Schema 兼容性与迁移**：
+   - 读取 `.aire/run-state.json` 中的 `schemaVersion`；
+   - 若属于已知旧版本（如未来从 `1.0.0` 升至 `1.1.0`），执行已注册的 Schema Migrator 进行向前兼容转换；
+   - 若属于未知的更高主版本，抛出 `UnsupportedSchemaVersionError` 拒绝 Resume。
+2. **拓扑一致性哈希比对**：
+   - 计算当前 `task-graph.yaml` 的 SHA-256 哈希值；
+   - 与 `run-state.json` 中的 `graphHash` 比对。若拓扑结构被破坏性篡改，抛出 `GraphDriftError` 拦截。
+
+#### Step 2: 机器可验证的崩溃状态校准（Crash Calibration）
+检查 RunState 中是否存在残留的未完成态（`activeTaskIds` 非空，或任务处于 `RUNNING / VERIFYING / REPAIRING / RETRYING`）：
+- 针对该任务，调度器检查 Git 仓库当前的 `HEAD`：
+  1. **提交前崩溃场景**：
+     若 `HEAD === baseCommit`，说明中断发生在代码提交前。调用 `rollbackWorkspace` 清理任何未跟踪脏文件，将该任务状态安全重置为 `PENDING`，清空 `activeTaskIds`；
+  2. **提交后、RunState 更新前崩溃场景**：
+     若 `HEAD !== baseCommit`，调度器通过 `git interpret-trailers` 校验 HEAD commit 的 Trailer 元数据：
+     ```bash
+     git log -1 --format="%(trailers:key=AIRE-Task-Id,valueonly)"
+     ```
+     - 若提取出的 `AIRE-Task-Id` 严格等于当前 `taskId` 且 `AIRE-Run-Id` 匹配：
+       **机器可验证该提交确属本任务！** 调度器安全校准状态为 `SUCCEEDED`，记录 `commit = HEAD`，补全 `TaskResult` 持久化，清空 `activeTaskIds`，杜绝错误回滚与重复提交！
+     - 若 Trailer 不匹配或不存在：说明存在外部干扰，调度器抛出 `WorkspaceInconsistentError` 保护现场并终止。
+
+#### Step 3: 修复后重试（`--retry-task <taskId>`）状态重算
+当用户修复代码或前置问题后发起 `--retry-task <taskId>`：
+1. 校验目标 `taskId` 是否处于 `FAILED` 状态；
+2. **严格重置为 `PENDING`**：
+   - 将该任务状态重置为 `PENDING`（**禁止直接重置为 `READY`**）；
    - 将其所有标记为 `BLOCKED` 的下游子孙节点统一重置回 `PENDING`；
-   - 重新执行 DAG 状态推导（`computeReadyTasks`），仅当子孙节点的所有直接依赖均满足 `SUCCEEDED` 时才激活，保证多依赖节点绝不早熟执行。
+3. **依 DAG 依赖统一重新推导就绪态**：
+   调用 `computeReadyTasks(graph, records)`。只有当该任务的全部直接前置依赖均为 `SUCCEEDED` 时，才自然进入 `READY`，严格杜绝多依赖节点的早熟执行；
+4. 调度器重新启动主循环。
 
 ---
 
@@ -392,18 +440,19 @@ export function buildDagTaskPrompt(
   - 验证孤立节点与线性依赖的拓扑排序正确性；
   - 验证 `computeReadyTasks` 就绪节点推导。
 - `tests/unit/dag/run-state-store.test.ts`:
-  - 验证 `.aire/run-state.json` 读写与哈希比对防漂移机制。
+  - 验证 `.aire/run-state.json` 原子写入（temp -> fsync -> rename）与读取；
+  - 验证哈希比对防漂移机制与 `schemaVersion` 迁移兼容校验。
 - `tests/unit/dag/execution-policy.test.ts`:
   - 验证失败任务级联推导阻断子孙节点；
   - 验证平行分支不受阻断影响；
-  - 验证 `--retry-task` 重置后下游回到 `PENDING` 并按依赖安全推导。
+  - 验证 `--retry-task` 重置为 `PENDING` 后，通过依赖判定安全推导就绪。
 - `tests/unit/dag/prompt-builder-dag.test.ts`:
   - 验证只注入直接依赖契约，间接祖先节点不侵入上下文。
 
 ### 6.2 Layer 2: 集成测试（Mock 状态机与工作区模拟）
 - `tests/integration/dag-diamond-flow.test.ts`:
   - 构造菱形依赖（`A -> B, A -> C, B & C -> D`）；
-  - 验证 A 成功后调度 B 与 C，B 和 C 均成功后调度 D，全图进入 `SUCCEEDED`，Git Commit 序列线性可溯。
+  - 验证 A 成功后调度 B 与 C，B 和 C 均成功后调度 D，全图进入 `SUCCEEDED`（验证终态判断非 HALTED），Git Commit 序列线性可溯。
 - `tests/integration/dag-failure-cascade.test.ts`:
   - 在菱形依赖中模拟 B 自愈失败（耗尽 3 次重试）；
   - 验证 B 自动回滚回 `baseCommit`；
@@ -411,8 +460,8 @@ export function buildDagTaskPrompt(
   - 验证独立分支 C 继续运行并成功（`SUCCEEDED`）；
   - 验证全图在无就绪节点后终止为 `HALTED`。
 - `tests/integration/dag-crash-recovery.test.ts`:
-  - 场景 1：模拟执行中崩溃（状态为 `RUNNING`），验证 Resume 自动重置并从 `baseCommit` 重新安全执行；
-  - 场景 2：模拟 Commit 完成后但 RunState 写入前崩溃，验证 Resume 自动通过 HEAD 识别并校准为 `SUCCEEDED`。
+  - 场景 1：模拟执行中崩溃（状态为 `RUNNING`，`HEAD === baseCommit`），验证 Resume 自动重置并从 `baseCommit` 重新安全执行；
+  - 场景 2：模拟 Commit 完成后但 RunState 写入前崩溃（`HEAD !== baseCommit`），验证 Resume 通过 Git Trailer `AIRE-Task-Id` 机器可验证并校准为 `SUCCEEDED`，补全 `TaskResult`。
 
 ### 6.3 Layer 3: 端到端 CLI 验证（E2E）
 - `tests/e2e/dag-cli.test.ts`:
