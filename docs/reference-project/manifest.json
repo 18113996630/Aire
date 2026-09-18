@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "description": "AIRE (AI iOS App Replica Engine) 参考开源项目元数据索引清单，记录跨环境下依赖与学习的标杆开源项目、仓库源、核心借鉴模块及关键文件索引。",
+  "projects": [
+    {
+      "name": "super-prototyping",
+      "repository": "https://github.com/18113996630/super-prototyping.git",
+      "branch": "main",
+      "local_directory": "docs/reference-project/super-prototyping",
+      "category": "Visual QA & Replica Measurement",
+      "description": "基于 tldraw 画布的像素级 UI 复刻工具箱与 Agent 工作流系统，主打可辩护的复刻（Defensible Replica）与数值证据链。",
+      "reference_modules": [
+        {
+          "name": "refkit 定量采样与度量工具链",
+          "key_files": [
+            "tools/refkit.py",
+            "tools/test_refkit.py"
+          ],
+          "relevance": "为 AIRE Visual QA 模块提供关键度量算法参考：网格视觉采样（grid）、纯色平铺识别（sample/flat fills）、文字墨水核检测（ink core）、垂直节奏与基线行高分析（bands）、亚像素边缘扫描（scan）、发丝分割线亏损求解（hairline）以及字体字形匹配（font）。"
+        },
+        {
+          "name": "探针校验机制 (Probe-based Verification)",
+          "key_files": [
+            ".agents/skills/clone-prototype/SKILL.md",
+            "README.md"
+          ],
+          "relevance": "确立 'A defect without a probe is a rumour' 原则。视觉 Review 报告必须附带确切的包围盒坐标（probe_box）、期望值、测量实际值与 Delta，杜绝主观模糊描述。"
+        },
+        {
+          "name": "可辩护的复刻与证据链 (Defensible Replica)",
+          "key_files": [
+            ".agents/skills/clone-prototype/SKILL.md",
+            "mockups/canvases/README.md"
+          ],
+          "relevance": "确立 'No evidence, no token' 原则。界面中所有颜色、边距、字号均需追溯到截图测量证据，禁止主观随意猜测。"
+        },
+        {
+          "name": "并发审阅与单一修改工作流 (Fan out looking, not editing)",
+          "key_files": [
+            ".agents/skills/clone-prototype/SKILL.md"
+          ],
+          "relevance": "规范 Agent 协作边界：视觉审阅（Visual Reviewer）可多屏幕并发分析，但代码写入（Developer）必须单点收敛，杜绝多 Agent 冲突与样式回滚。"
+        }
+      ],
+      "restore_command": "git clone https://github.com/18113996630/super-prototyping.git docs/reference-project/super-prototyping"
+    }
+  ]
+}

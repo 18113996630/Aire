@@ -138,14 +138,16 @@ Cursor Agent
 
 # 3. 核心使用场景
 
-## 3.1 App Replica
+系统支持两大核心开发场景：**App Replica（竞品逆向复刻）** 与 **PRD & Prototype（需求与原型驱动开发）**。
+
+## 3.1 场景一：App Replica（竞品逆向复刻）
+
+适用：对标已有竞品应用，通过真机截图或交互录屏进行像素级高保真复刻。
 
 例如：
-
 > 我要复刻一个已有的卡片 App。
 
 提供：
-
 ```text
 /reference
     home.png
@@ -160,41 +162,98 @@ Cursor Agent
     requirements.md
 ```
 
-然后执行：
-
-```bash
-aire run
-```
-
 AIRE 自动完成：
-
 ```text
-分析参考资料
+分析参考资料/截图
  ↓
 生成产品 Spec
  ↓
-生成 UI Spec
+生成 UI Spec & Design Tokens
  ↓
 设计技术架构
  ↓
-拆分开发任务
+拆分开发任务 (Task Graph)
  ↓
-创建 Agent Team
+多 Agent 协作开发 (SwiftUI)
  ↓
-开发
+Build (XcodeBuild)
  ↓
-Build
+Simulator 运行
  ↓
-Simulator
+功能测试 (XCTest)
  ↓
-测试
+视觉 Review (Refkit 探针比对)
  ↓
-视觉 Review
+Auto Fix 自愈循环
  ↓
-Fix
- ↓
-重新测试
+完成交付
 ```
+
+---
+
+## 3.2 场景二：PRD & Prototype（需求文档 + 原型设计驱动开发）
+
+适用：全新产品开发或自研需求迭代，已具备清晰的产品需求文档（PRD/功能说明）与 UI 原型切图（Figma/Sketch 导出的标准画板）。
+
+例如：
+> 我要根据需求文档和设计原型，开发一个全新的记账 App 核心流。
+
+提供材料：
+```text
+/requirements
+    prd.md                   # 详细业务逻辑、用例、边界条件、数据字典
+    features.md              # 待实现的 Feature 列表与验收标准
+
+/designs
+    billing-home.png         # Figma 导出的标准尺寸切图 (@3x, 如 1179x2556)
+    billing-editor.png
+    routes.yaml              # 页面路由与原型切图映射配置
+
+/mocks
+    preview-data.json        # 与原型图视觉呈现对齐的 Preview/Mock 数据
+```
+
+AIRE 自动化流水线：
+```text
+解析 PRD 业务逻辑与原型切图
+ ↓
+领域数据建模 (SwiftData / Codable) 与 ViewModel 状态机设计
+ ↓
+提取 UI 组件结构与 Design Tokens (Colors / Fonts / Spacing)
+ ↓
+注入 Mock 预览数据 (确保 Simulator 渲染文本与原型图排版对齐)
+ ↓
+生成拓扑任务图 (Task Graph DAG: 数据层 → 基础组件 → 页面 → 路由)
+ ↓
+多 Agent 协作开发 (SwiftUI + MVVM + Coordinator)
+ ↓
+XcodeBuild 编译检查与 Swift 报错自愈
+ ↓
+XCTest / XCUITest 自动化业务逻辑验证 (覆盖 PRD 验收条件)
+ ↓
+Simulator 运行并通过路由直达指定页面
+ ↓
+模拟器自动截屏并应用 Safe Area / Status Bar 遮罩
+ ↓
+Refkit 探针比对原型图 (提取 Flat Fills, Ink Core, Bands, Scan)
+ ↓
+多维缺陷自愈 (编译错误 / 业务断言失败 / 视觉量化超标)
+ ↓
+重新构建并再验证直至全指标达标
+```
+
+---
+
+## 3.3 两大核心模式特性对照
+
+| 维度 | App Replica（竞品逆向复刻） | PRD & Prototype（需求原型驱动开发） |
+| :--- | :--- | :--- |
+| **输入材料** | 竞品真机截图、操作录屏、简单需求描述 | 结构化 PRD、Figma/Sketch 标准原型切图、Mock 数据配置 |
+| **视觉基准** | 真实 App 渲染截图（含系统状态栏、真实键盘） | 设计画板导出图（通常无系统状态栏、含占位图/假数据） |
+| **视觉评估适配** | 全图直接尺度校准与色彩空间统一 | 自动应用状态栏遮罩（Mask），避免顶部 Safe Area 假阳性色差 |
+| **数据与排版** | 竞品界面自带真实文案与数据流 | 必须在 SwiftUI 中注入与原型图一致的 Mock 数据，保障 Ink Core 墨水核对齐 |
+| **验收核心权重** | 视觉像素级还原（Refkit Delta $\le$ 容差上限） | **双重验收**：XCTest 业务逻辑测试通过 + Refkit 视觉还原达标 |
+| **页面导航策略** | 多依赖录屏推测或首屏渐进展开 | 通过路由配置（`routes.yaml` 或 Launch Arguments）直达目标页面截屏 |
 
 ---
 
@@ -1220,8 +1279,9 @@ aire/
 
 # 26. 项目配置
 
-用户项目：
+用户项目支持两种标准输入形态：
 
+### 26.1 竞品复刻型项目结构
 ```text
 my-replica/
 ├── .aire/
@@ -1241,6 +1301,33 @@ my-replica/
 │   └── requirements.md
 │
 └── iOSProject/
+```
+
+### 26.2 需求与原型驱动型项目结构（PRD & Prototype）
+```text
+my-product-app/
+├── .aire/
+│   ├── project.yaml
+│   ├── agents/
+│   ├── workflows/
+│   ├── tasks/
+│   ├── artifacts/
+│   └── evaluations/
+│
+├── requirements/
+│   ├── prd.md               # 业务逻辑、用例与边界规则
+│   └── features.md          # 模块清单与优先级
+│
+├── designs/                 # Figma / Sketch 导出的标准切图 (@3x)
+│   ├── auth-login.png
+│   ├── dashboard-main.png
+│   ├── card-detail.png
+│   └── routes.yaml          # 页面路由与设计切图关联表
+│
+├── mocks/                   # 对齐原型图文案的静态/测试数据
+│   └── mock-state.json
+│
+└── iOSProject/              # SwiftUI 源代码工程 (SwiftData + MVVM)
 ```
 
 ---
