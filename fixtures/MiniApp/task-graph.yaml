@@ -1,0 +1,37 @@
+version: "1.0.0"
+project:
+  name: "MiniApp"
+  targetScheme: "MiniApp"
+tasks:
+  - id: "task-data-model"
+    title: "Implement Greeting Data Model"
+    goal: "Define a Greeting model in Swift"
+    role: "iOS Developer"
+    dependencies: []
+    allowed_files:
+      - "MiniApp/Greeting.swift"
+    acceptance_criteria:
+      - "Greeting struct conforms to Identifiable and Codable"
+      - "Greeting model compiles cleanly without warnings or errors"
+    verification:
+      build: true
+  - id: "task-card-view"
+    title: "Implement Greeting Card View"
+    goal: "Create a SwiftUI view rendering Greeting card"
+    role: "iOS Developer"
+    dependencies:
+      - "task-data-model"
+    allowed_files:
+      - "MiniApp/GreetingCardView.swift"
+    acceptance_criteria:
+      - "GreetingCardView renders Greeting title and message"
+      - "Visual probe comparison passes within configured tolerances"
+    verification:
+      build: true
+      visual:
+        reference: "reference.png"
+        focus: "Greeting card styling"
+        tolerance:
+          containerDeltaMax: 7.0
+          spacingPtMax: 2.0
+          textDeltaMax: 15.0
