@@ -16,4 +16,5 @@ test('bin/aire.ts --help displays visual review options', () => {
   assert.match(stdout, /--spacing-pt-max/);
   assert.match(stdout, /--text-delta-max/);
   assert.match(stdout, /--device/);
+  assert.match(stdout, /--settle-delay/);
 });

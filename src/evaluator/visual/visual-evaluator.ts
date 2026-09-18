@@ -53,6 +53,10 @@ export class VisualReviewEvaluator implements IEvaluator {
     }
     if (context.bundleId) {
       await this.simManager.launchApp(udid, context.bundleId);
+      const settleMs = context.visualConfig?.settleDelayMs ?? (process.env.NODE_ENV === 'test' ? 0 : 1500);
+      if (settleMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, settleMs));
+      }
     }
     await this.simManager.takeScreenshot(udid, screenshotPath);
 

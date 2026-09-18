@@ -60,6 +60,7 @@ export interface VisualReplicaConfig {
   focusAreas?: string;
   toleranceMatrix: VisualToleranceMatrix;
   preferredDevice?: string;
+  settleDelayMs?: number;
 }
 
 export interface TaskContext {

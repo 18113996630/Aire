@@ -28,6 +28,7 @@ program
   .option('--spacing-pt-max <val>', 'Max allowed spacing error in pt', '2.0')
   .option('--text-delta-max <val>', 'Max allowed text color delta', '15.0')
   .option('--device <name>', 'Preferred simulator device name', 'iPhone 16 Pro')
+  .option('--settle-delay <ms>', 'Delay in milliseconds after launch before screenshot', '1500')
   .action(async (options) => {
     const projectPath = resolve(process.cwd(), options.project);
     const maxRetries = parseInt(options.maxRetries, 10);
@@ -53,6 +54,7 @@ program
             textDeltaMax: parseFloat(options.textDeltaMax ?? '15.0'),
           },
           preferredDevice: options.device,
+          settleDelayMs: parseInt(options.settleDelay ?? '1500', 10),
         }
       : undefined;
 

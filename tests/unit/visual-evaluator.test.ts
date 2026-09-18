@@ -187,3 +187,53 @@ test('VisualReviewEvaluator populates context paths and invokes simulator method
   assert.equal(ctx.capturedScreenshotPath, screenshots[0].path);
   assert.match(ctx.generatedProbesPath ?? '', /probes\.json$/);
 });
+
+test('VisualReviewEvaluator respects settleDelayMs configuration', async () => {
+  let launchTimestamp = 0;
+  let screenshotTimestamp = 0;
+
+  const mockSim: ISimulatorManager = {
+    findOrBootDevice: async () => 'UDID-MOCK',
+    installApp: async () => {},
+    launchApp: async () => {
+      launchTimestamp = Date.now();
+      return 1234;
+    },
+    takeScreenshot: async () => {
+      screenshotTimestamp = Date.now();
+    },
+    terminateApp: async () => {},
+  };
+
+  const mockRefkit: IRefkitBridge = {
+    runBatch: async (): Promise<RefkitBatchReport> => ({
+      meanDelta: 1.0,
+      passed: true,
+      probeResults: [],
+      worstBands: [],
+    }),
+    runDiff: async () => ({ meanDelta: 1.0 }),
+  };
+
+  const evaluator = new VisualReviewEvaluator(mockSim, mockRefkit);
+  const ctx = createTaskContext({
+    taskId: 'vis-task-delay',
+    projectPath: '/test',
+    scheme: 'MiniApp',
+    taskGoal: 'Test settle delay',
+    visualConfig: {
+      referenceImagePath: '/tmp/ref.png',
+      settleDelayMs: 50,
+      toleranceMatrix: {
+        containerDeltaMax: 7.0,
+        spacingPtMax: 2.0,
+        textDeltaMax: 15.0,
+      },
+    },
+  });
+  ctx.bundleId = 'com.example.MiniApp';
+
+  await evaluator.evaluate(ctx);
+
+  assert.ok(screenshotTimestamp >= launchTimestamp + 40, 'Screenshot should be taken after settle delay');
+});
