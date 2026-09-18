@@ -134,6 +134,9 @@ program
 
           const yamlContent = await fs.readFile(taskGraphPath, 'utf-8');
           const graph = TaskGraph.fromYaml(yamlContent);
+          if (taskRunner?.setDefaultScheme) {
+            taskRunner.setDefaultScheme(graph.project?.targetScheme ?? options.scheme);
+          }
           const scheduler = new SerialDagScheduler({
             rawYamlContent: yamlContent,
             graphPath: taskGraphPath,

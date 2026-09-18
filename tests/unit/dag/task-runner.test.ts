@@ -273,4 +273,35 @@ describe('TaskRunner', () => {
     assert.ok(capturedContext.taskGoal.includes('DEP-1'));
     assert.ok(capturedContext.taskGoal.includes('User.swift'));
   });
+
+  test('setDefaultScheme sets scheme when task verification has no scheme', async () => {
+    let capturedContext: TaskContext | undefined;
+    const mockCli = new MockCliAdapter();
+    const mockEvaluator: IEvaluator = {
+      name: 'MockEvaluator',
+      evaluate: async (ctx) => {
+        capturedContext = ctx;
+        return { passed: true, type: 'BUILD', summary: 'Clean', errors: [] };
+      },
+    };
+
+    const runner = new TaskRunner({
+      cliAdapter: mockCli,
+      evaluatorFactory: () => mockEvaluator,
+    });
+
+    runner.setDefaultScheme('MiniApp');
+
+    await runner.executeTask(
+      baseTask,
+      '/test/project',
+      'run-scheme-test',
+      [],
+      'commit-base',
+      async () => {}
+    );
+
+    assert.ok(capturedContext);
+    assert.equal(capturedContext.scheme, 'MiniApp');
+  });
 });

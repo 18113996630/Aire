@@ -133,6 +133,8 @@ export interface TaskExecutionOutcome {
   baseCommit?: string;
   commit?: string;
   changedFiles?: string[];
+  artifacts?: string[];
+  apiContracts?: string[];
   error?: TaskError;
   summary?: string;
 }

@@ -29,6 +29,15 @@ export class TaskRunner implements ITaskRunner {
   }
 
   /**
+   * Set or update default scheme if not explicitly provided during construction
+   */
+  setDefaultScheme(scheme?: string): void {
+    if (scheme && !this.options.defaultScheme) {
+      this.options.defaultScheme = scheme;
+    }
+  }
+
+  /**
    * Constructs the appropriate IEvaluator for the given task.
    * If evaluatorFactory is provided, delegates to it;
    * otherwise, builds EvaluatorPipeline([XcodeBuildEvaluator, VisualReviewEvaluator])

@@ -4,7 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { SerialWorkspaceStrategy } from '../../../src/dag/serial-workspace-strategy.ts';
+import {
+  SerialWorkspaceStrategy,
+  DirtyWorkspaceError,
+  DisallowedFilesError,
+  matchesAllowedFile
+} from '../../../src/dag/serial-workspace-strategy.ts';
 import type { WorkspaceContext, CommitMetadata } from '../../../src/dag/types.ts';
 
 describe('SerialWorkspaceStrategy', () => {
@@ -60,7 +65,7 @@ describe('SerialWorkspaceStrategy', () => {
       projectPath: testRepoDir,
       taskId: 'task-auth',
       runId: 'run-777',
-      allowedFiles: ['Sources/Auth.swift']
+      allowedFiles: ['Auth.swift', 'README.md']
     };
 
     const baseCommit = await strategy.captureSnapshot(ctx);
@@ -210,4 +215,148 @@ describe('SerialWorkspaceStrategy', () => {
     const status = execSync('git status --porcelain', { cwd: testRepoDir }).toString().trim();
     assert.equal(status, '');
   });
+
+  test('captureSnapshot throws DirtyWorkspaceError when working directory is dirty', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-dirty',
+      runId: 'run-001',
+      allowedFiles: []
+    };
+
+    // Make working directory dirty with uncommitted untracked file
+    writeFileSync(join(testRepoDir, 'dirty.tmp'), 'dirty file\n');
+
+    await assert.rejects(
+      async () => {
+        await strategy.captureSnapshot(ctx);
+      },
+      (err: any) => {
+        assert.ok(err instanceof DirtyWorkspaceError);
+        assert.match(err.message, /workspace has uncommitted changes/);
+        return true;
+      }
+    );
+  });
+
+  test('commitTaskWorkspace throws DisallowedFilesError when disallowed files are modified', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-disallowed',
+      runId: 'run-002',
+      allowedFiles: ['Sources/Allowed.swift']
+    };
+
+    const baseCommit = await strategy.getCurrentHead(ctx);
+
+    // Write file outside allowedFiles
+    writeFileSync(join(testRepoDir, 'Forbidden.swift'), '// unauthorized\n');
+
+    const meta: CommitMetadata = {
+      runId: 'run-002',
+      taskId: 'task-disallowed',
+      baseCommit,
+      title: 'Modify forbidden file'
+    };
+
+    await assert.rejects(
+      async () => {
+        await strategy.commitTaskWorkspace(ctx, meta);
+      },
+      (err: any) => {
+        assert.ok(err instanceof DisallowedFilesError);
+        assert.deepEqual(err.disallowedFiles, ['Forbidden.swift']);
+        return true;
+      }
+    );
+  });
+
+  test('commitTaskWorkspace accepts glob patterns in allowedFiles', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-glob',
+      runId: 'run-003',
+      allowedFiles: ['Sources/**/*.swift', 'Config/*.json']
+    };
+
+    const baseCommit = await strategy.getCurrentHead(ctx);
+
+    execSync('mkdir -p Sources/Feature Config', { cwd: testRepoDir });
+    writeFileSync(join(testRepoDir, 'Sources/Feature/View.swift'), '// View\n');
+    writeFileSync(join(testRepoDir, 'Config/settings.json'), '{}\n');
+
+    const meta: CommitMetadata = {
+      runId: 'run-003',
+      taskId: 'task-glob',
+      baseCommit,
+      title: 'Add files matching globs'
+    };
+
+    const commitSha = await strategy.commitTaskWorkspace(ctx, meta);
+    assert.match(commitSha, /^[a-f0-9]{40}$/);
+
+    const changed = await strategy.extractChangedFiles(ctx, baseCommit);
+    assert.deepEqual(changed.sort(), ['Config/settings.json', 'Sources/Feature/View.swift']);
+  });
+
+  test('verifyCommitBelongsToTask validates expectedBaseCommit trailer matching and mismatch', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-trailer',
+      runId: 'run-004',
+      allowedFiles: ['README.md']
+    };
+
+    const baseCommit = await strategy.getCurrentHead(ctx);
+    writeFileSync(join(testRepoDir, 'README.md'), '# Trailer test\n');
+
+    const meta: CommitMetadata = {
+      runId: 'run-004',
+      taskId: 'task-trailer',
+      baseCommit,
+      title: 'Trailer test'
+    };
+
+    const commitSha = await strategy.commitTaskWorkspace(ctx, meta);
+
+    // Matching expectedBaseCommit returns true
+    const match = await strategy.verifyCommitBelongsToTask(
+      testRepoDir,
+      commitSha,
+      'task-trailer',
+      'run-004',
+      baseCommit
+    );
+    assert.equal(match, true);
+
+    // Mismatched expectedBaseCommit returns false
+    const mismatch = await strategy.verifyCommitBelongsToTask(
+      testRepoDir,
+      commitSha,
+      'task-trailer',
+      'run-004',
+      'wrong-base-commit-sha'
+    );
+    assert.equal(mismatch, false);
+  });
+
+  test('prepareWorkspace ensures .aire/ is appended to .git/info/exclude', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-exclude',
+      runId: 'run-005',
+      allowedFiles: []
+    };
+
+    await strategy.prepareWorkspace(ctx);
+
+    const excludeContent = readFileSync(join(testRepoDir, '.git', 'info', 'exclude'), 'utf-8');
+    assert.match(excludeContent, /\.aire\//);
+
+    // Calling again is idempotent and does not duplicate
+    await strategy.prepareWorkspace(ctx);
+    const count = (excludeContent.match(/\.aire\//g) || []).length;
+    assert.equal(count, 1);
+  });
 });
+

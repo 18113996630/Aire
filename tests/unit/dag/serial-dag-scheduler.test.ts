@@ -10,6 +10,7 @@ import {
 import { TaskGraph } from '../../../src/dag/task-graph.ts';
 import { RunStateStore, GraphDriftError } from '../../../src/dag/run-state-store.ts';
 import { CascadeExecutionPolicy } from '../../../src/dag/cascade-execution-policy.ts';
+import { DisallowedFilesError } from '../../../src/dag/serial-workspace-strategy.ts';
 import type {
   TaskNode,
   TaskResult,
@@ -113,7 +114,16 @@ function createMockArtifactManager(): IArtifactManager & { results: Map<string, 
 }
 
 function createMockTaskRunner(
-  behavior: Record<string, { success: boolean; summary?: string; error?: TaskError }>
+  behavior: Record<
+    string,
+    {
+      success: boolean;
+      summary?: string;
+      error?: TaskError;
+      artifacts?: string[];
+      apiContracts?: string[];
+    }
+  >
 ): ITaskRunner & { executedTasks: string[]; stateHistory: Array<{ taskId: string; status: TaskExecutionStatus }> } {
   const executedTasks: string[] = [];
   const stateHistory: Array<{ taskId: string; status: TaskExecutionStatus }> = [];
@@ -143,6 +153,8 @@ function createMockTaskRunner(
           taskId: task.id,
           baseCommit,
           summary: outcomeConfig.summary ?? `Task ${task.id} succeeded`,
+          artifacts: outcomeConfig.artifacts,
+          apiContracts: outcomeConfig.apiContracts,
         };
       } else {
         return {
@@ -651,6 +663,134 @@ tasks:
     assert.ok(runStateStore.state);
     // Task A had RETRYING emitted once, so retryCount must be 1
     assert.equal(runStateStore.state.tasks['task-a'].retryCount, 1);
+  });
+
+  test('Case 8: run() sets defaultScheme from graph.project.targetScheme onto TaskRunner', async () => {
+    const yamlWithScheme = `
+version: "1.0.0"
+project:
+  name: "SchemeApp"
+  targetScheme: "CustomScheme"
+tasks:
+  - id: "task-scheme"
+    title: "Test Scheme"
+    goal: "Goal"
+    role: "iOS Developer"
+    dependencies: []
+    allowed_files: ["Scheme.swift"]
+    acceptance_criteria: ["compiles"]
+`;
+    const graph = TaskGraph.fromYaml(yamlWithScheme);
+    const workspaceStrategy = createMockWorkspaceStrategy();
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+
+    let schemeReceived: string | undefined;
+    const customRunner: ITaskRunner = {
+      async executeTask() {
+        return { success: true, taskId: 'task-scheme' };
+      },
+      setDefaultScheme(scheme?: string) {
+        schemeReceived = scheme;
+      },
+    };
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner: customRunner,
+      rawYamlContent: yamlWithScheme,
+    });
+
+    await scheduler.run(graph, { projectPath: '/mock/project' });
+    assert.equal(schemeReceived, 'CustomScheme');
+  });
+
+  test('Case 9: DisallowedFilesError during commit triggers rollback and cascade-blocks downstream tasks', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    let rollbackCalled = false;
+    let rollbackCommit: string | undefined;
+
+    const workspaceStrategy = createMockWorkspaceStrategy({
+      commitTaskWorkspace: async (_ctx, _meta) => {
+        throw new DisallowedFilesError(['Forbidden.swift']);
+      },
+      rollbackWorkspace: async (_ctx, baseCommit) => {
+        rollbackCalled = true;
+        rollbackCommit = baseCommit;
+      },
+    });
+
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+    const taskRunner = createMockTaskRunner({
+      'task-a': { success: true },
+      'task-b': { success: true },
+    });
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    const report = await scheduler.run(graph, { projectPath: '/mock/project' });
+
+    assert.equal(report.status, 'HALTED');
+    assert.deepEqual(report.failedTasks, ['task-a']);
+    assert.deepEqual(report.blockedTasks, ['task-b']);
+    assert.equal(rollbackCalled, true);
+    assert.equal(rollbackCommit, 'commit-0');
+
+    const taskARecord = runStateStore.state?.tasks['task-a'];
+    assert.equal(taskARecord?.status, 'FAILED');
+    assert.equal(taskARecord?.error?.type, 'DISALLOWED_FILES_MODIFIED');
+    assert.match(taskARecord?.error?.message ?? '', /Forbidden\.swift/);
+
+    const taskBRecord = runStateStore.state?.tasks['task-b'];
+    assert.equal(taskBRecord?.status, 'BLOCKED');
+    assert.equal(taskBRecord?.blockedBy, 'task-a');
+  });
+
+  test('Case 10: Structured Artifact Hand-Off propagates apiContracts and artifacts into TaskResult', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    const workspaceStrategy = createMockWorkspaceStrategy();
+    const runStateStore = createMockRunStateStore();
+
+    const savedResults = new Map<string, TaskResult>();
+    const artifactManager: IArtifactManager = {
+      ...createMockArtifactManager(),
+      saveTaskResult: async (_projectPath, result) => {
+        savedResults.set(result.taskId, result);
+      },
+    };
+
+    const taskRunner = createMockTaskRunner({
+      'task-a': {
+        success: true,
+        apiContracts: ['struct User: Codable', 'protocol UserStore'],
+        artifacts: ['docs/architecture.md'],
+      },
+      'task-b': { success: true },
+    });
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    await scheduler.run(graph, { projectPath: '/mock/project' });
+
+    const taskAResult = savedResults.get('task-a');
+    assert.ok(taskAResult);
+    assert.deepEqual(taskAResult.apiContracts, ['struct User: Codable', 'protocol UserStore']);
+    assert.deepEqual(taskAResult.artifacts, ['docs/architecture.md']);
   });
 });
 

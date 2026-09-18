@@ -14,4 +14,6 @@ export interface ITaskRunner {
     baseCommit: string,
     onStateChange: (status: TaskExecutionStatus) => Promise<void>
   ): Promise<TaskExecutionOutcome>;
+
+  setDefaultScheme?(scheme?: string): void;
 }

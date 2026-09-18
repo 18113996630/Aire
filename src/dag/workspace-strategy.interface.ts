@@ -17,6 +17,11 @@ export interface IWorkspaceStrategy {
   captureSnapshot(ctx: WorkspaceContext): Promise<string>;
 
   /**
+   * Get the current HEAD commit SHA without asserting workspace cleanliness
+   */
+  getCurrentHead?(ctx: WorkspaceContext | string): Promise<string>;
+
+  /**
    * Rollback working directory and index hard to baseCommit, cleaning untracked files
    */
   rollbackWorkspace(ctx: WorkspaceContext, baseCommit: string): Promise<void>;
@@ -38,7 +43,8 @@ export interface IWorkspaceStrategy {
     projectPath: string,
     commitSha: string,
     taskId: string,
-    runId: string
+    runId: string,
+    expectedBaseCommit?: string
   ): Promise<boolean>;
 
   /**

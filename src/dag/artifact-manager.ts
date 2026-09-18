@@ -8,6 +8,42 @@ import * as path from 'node:path';
 import type { TaskResult, TaskNode } from './types.ts';
 import type { IArtifactManager } from './artifact-manager.interface.ts';
 
+/**
+ * Extract public/internal Swift type and protocol declarations from changed .swift files.
+ */
+export async function extractSwiftApiContracts(
+  projectPath: string,
+  changedFiles: string[]
+): Promise<string[]> {
+  const contracts: string[] = [];
+  const swiftFiles = changedFiles.filter((f) => f.endsWith('.swift'));
+
+  for (const relFile of swiftFiles) {
+    const fullPath = path.isAbsolute(relFile) ? relFile : path.join(projectPath, relFile);
+    try {
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const lines = content.split('\n');
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        const match = trimmed.match(
+          /^(?:(?:public|open|internal|final|fileprivate|private)\s+)*(?:struct|class|enum|protocol|actor|typealias)\s+([A-Za-z0-9_]+(?:\s*:[^{=]+)?(?:\s*=[^{]+)?)/
+        );
+        if (match) {
+          const decl = match[0].replace(/\s*\{.*$/, '').trim();
+          if (decl && !contracts.includes(decl)) {
+            contracts.push(decl);
+          }
+        }
+      }
+    } catch {
+      // File might have been deleted or inaccessible
+    }
+  }
+
+  return contracts;
+}
+
 export class ArtifactManager implements IArtifactManager {
   private getTaskResultPath(projectPath: string, taskId: string): string {
     return path.join(projectPath, '.aire', 'tasks', taskId, 'result.json');
@@ -25,15 +61,25 @@ export class ArtifactManager implements IArtifactManager {
   }
 
   /**
-   * Retrieve task result for a given taskId, or null if not found or corrupted
+   * Retrieve task result for a given taskId, or null if not found (ENOENT).
+   * Throws error if JSON is corrupted or disk read fails.
    */
   async getTaskResult(projectPath: string, taskId: string): Promise<TaskResult | null> {
     const filePath = this.getTaskResultPath(projectPath, taskId);
+    let content: string;
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      content = await fs.readFile(filePath, 'utf-8');
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
+
+    try {
       return JSON.parse(content) as TaskResult;
-    } catch {
-      return null;
+    } catch (parseError: any) {
+      throw new Error(`Corrupted task result at ${filePath}: ${parseError.message}`);
     }
   }
 
@@ -65,6 +111,11 @@ export class ArtifactManager implements IArtifactManager {
     const existing = await this.getTaskResult(projectPath, task.id);
     const isExistingValidForCommit = existing !== null && existing.commit === commit;
 
+    const apiContracts =
+      isExistingValidForCommit && existing.apiContracts && existing.apiContracts.length > 0
+        ? existing.apiContracts
+        : await extractSwiftApiContracts(projectPath, changedFiles);
+
     const result: TaskResult = {
       taskId: task.id,
       title: task.title,
@@ -76,7 +127,7 @@ export class ArtifactManager implements IArtifactManager {
           : `Reconstructed task result for ${task.id} (${task.title})`,
       changedFiles,
       artifacts: isExistingValidForCommit && existing.artifacts ? existing.artifacts : [],
-      apiContracts: isExistingValidForCommit && existing.apiContracts ? existing.apiContracts : [],
+      apiContracts,
       baseCommit,
       commit,
       completedAt:

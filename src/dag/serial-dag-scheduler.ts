@@ -13,7 +13,7 @@ import { SerialWorkspaceStrategy } from './serial-workspace-strategy.ts';
 import type { IWorkspaceStrategy } from './workspace-strategy.interface.ts';
 import { CascadeExecutionPolicy } from './cascade-execution-policy.ts';
 import type { IExecutionPolicy } from './execution-policy.interface.ts';
-import { ArtifactManager } from './artifact-manager.ts';
+import { ArtifactManager, extractSwiftApiContracts } from './artifact-manager.ts';
 import type { IArtifactManager } from './artifact-manager.interface.ts';
 import { RunStateStore, GraphDriftError } from './run-state-store.ts';
 import type { IRunStateStore } from './run-state-store.interface.ts';
@@ -58,6 +58,7 @@ export class SerialDagScheduler implements IScheduler {
   private artifactManager: IArtifactManager;
   private runStateStore: IRunStateStore;
   private taskRunner: ITaskRunner;
+  private customTaskRunner: boolean;
   private rawYamlContent?: string;
   private graphPath?: string;
 
@@ -66,6 +67,7 @@ export class SerialDagScheduler implements IScheduler {
     this.executionPolicy = options?.executionPolicy ?? new CascadeExecutionPolicy();
     this.artifactManager = options?.artifactManager ?? new ArtifactManager();
     this.runStateStore = options?.runStateStore ?? new RunStateStore();
+    this.customTaskRunner = !!options?.taskRunner;
     this.taskRunner = options?.taskRunner ?? new TaskRunner();
     this.rawYamlContent = options?.rawYamlContent;
     this.graphPath = options?.graphPath;
@@ -78,6 +80,14 @@ export class SerialDagScheduler implements IScheduler {
     const startTime = Date.now();
     const projectPath = options.projectPath;
     const runId = randomUUID();
+
+    if (!this.customTaskRunner) {
+      this.taskRunner = new TaskRunner({
+        defaultScheme: graph.project?.targetScheme,
+      });
+    } else if (this.taskRunner.setDefaultScheme) {
+      this.taskRunner.setDefaultScheme(graph.project?.targetScheme);
+    }
 
     const graphPath = this.graphPath ?? path.join(projectPath, 'task-graph.yaml');
     let graphHash: string;
@@ -159,6 +169,14 @@ export class SerialDagScheduler implements IScheduler {
     }
     const graph = TaskGraph.fromYaml(yamlContent);
 
+    if (!this.customTaskRunner) {
+      this.taskRunner = new TaskRunner({
+        defaultScheme: graph.project?.targetScheme,
+      });
+    } else if (this.taskRunner.setDefaultScheme) {
+      this.taskRunner.setDefaultScheme(graph.project?.targetScheme);
+    }
+
     // Step 2: Crash Calibration for activeTaskIds and non-terminal states
     const activeIds = new Set<string>(runState.activeTaskIds || []);
     for (const [taskId, record] of Object.entries(runState.tasks)) {
@@ -180,7 +198,9 @@ export class SerialDagScheduler implements IScheduler {
         allowedFiles: taskNode.allowed_files,
       };
 
-      const head = await this.workspaceStrategy.captureSnapshot(ctx);
+      const head = this.workspaceStrategy.getCurrentHead
+        ? await this.workspaceStrategy.getCurrentHead(ctx)
+        : await this.workspaceStrategy.captureSnapshot(ctx);
 
       if (baseCommit && head === baseCommit) {
         // Interrupted before commit: rollback dirty files and reset to PENDING
@@ -193,7 +213,8 @@ export class SerialDagScheduler implements IScheduler {
           projectPath,
           head,
           activeTaskId,
-          runState.runId
+          runState.runId,
+          baseCommit
         );
 
         if (belongs) {
@@ -388,41 +409,93 @@ export class SerialDagScheduler implements IScheduler {
       taskReports[taskId] = outcome;
 
       if (outcome.success) {
-        const commitMeta: CommitMetadata = {
-          runId: runState.runId,
-          taskId,
-          baseCommit,
-          title: task.title,
-        };
+        try {
+          const commitMeta: CommitMetadata = {
+            runId: runState.runId,
+            taskId,
+            baseCommit,
+            title: task.title,
+          };
 
-        const newCommit = await this.workspaceStrategy.commitTaskWorkspace(ctx, commitMeta);
-        const changedFiles = await this.workspaceStrategy.extractChangedFiles(ctx, baseCommit);
+          const newCommit = await this.workspaceStrategy.commitTaskWorkspace(ctx, commitMeta);
+          const changedFiles = await this.workspaceStrategy.extractChangedFiles(ctx, baseCommit);
 
-        const taskResult: TaskResult = {
-          taskId,
-          title: task.title,
-          goal: task.goal,
-          status: 'SUCCEEDED',
-          summary: outcome.summary || `Task ${taskId} completed successfully`,
-          changedFiles,
-          artifacts: [],
-          baseCommit,
-          commit: newCommit,
-          completedAt: new Date().toISOString(),
-        };
+          const apiContracts =
+            outcome.apiContracts && outcome.apiContracts.length > 0
+              ? outcome.apiContracts
+              : await extractSwiftApiContracts(projectPath, changedFiles);
 
-        await this.artifactManager.saveTaskResult(projectPath, taskResult);
+          const taskResult: TaskResult = {
+            taskId,
+            title: task.title,
+            goal: task.goal,
+            status: 'SUCCEEDED',
+            summary: outcome.summary || `Task ${taskId} completed successfully`,
+            changedFiles,
+            artifacts: outcome.artifacts ?? [],
+            apiContracts,
+            baseCommit,
+            commit: newCommit,
+            completedAt: new Date().toISOString(),
+          };
 
-        taskRecord.status = 'SUCCEEDED';
-        taskRecord.commit = newCommit;
-        taskRecord.completedAt = taskResult.completedAt;
-        taskRecord.resultPath = `.aire/tasks/${taskId}/result.json`;
-        taskRecord.error = undefined;
-        runState.activeTaskIds = [];
-        runState.updatedAt = new Date().toISOString();
-        await this.runStateStore.saveRunState(projectPath, runState);
+          await this.artifactManager.saveTaskResult(projectPath, taskResult);
 
-        await this.workspaceStrategy.cleanupWorkspace(ctx);
+          taskRecord.status = 'SUCCEEDED';
+          taskRecord.commit = newCommit;
+          taskRecord.completedAt = taskResult.completedAt;
+          taskRecord.resultPath = `.aire/tasks/${taskId}/result.json`;
+          taskRecord.error = undefined;
+          runState.activeTaskIds = [];
+          runState.updatedAt = new Date().toISOString();
+          await this.runStateStore.saveRunState(projectPath, runState);
+
+          await this.workspaceStrategy.cleanupWorkspace(ctx);
+        } catch (commitErr: any) {
+          await this.workspaceStrategy.rollbackWorkspace(ctx, baseCommit);
+
+          const error: TaskError = {
+            type: commitErr.name === 'DisallowedFilesError' ? 'DISALLOWED_FILES_MODIFIED' : 'COMMIT_FAILED',
+            message: commitErr.message || String(commitErr),
+          };
+
+          const decision = this.executionPolicy.onTaskFailure(task, error, graph);
+
+          taskRecord.status = 'FAILED';
+          taskRecord.error = error;
+          taskRecord.completedAt = new Date().toISOString();
+
+          if (decision === FailureDecision.CASCADE_BLOCK_AND_CONTINUE) {
+            const dependents = graph.getTransitiveDependents(taskId);
+            for (const dep of dependents) {
+              const depRecord = runState.tasks[dep.id];
+              if (depRecord && depRecord.status !== 'SUCCEEDED') {
+                depRecord.status = 'BLOCKED';
+                depRecord.blockedBy = taskId;
+              }
+            }
+          } else if (decision === FailureDecision.ABORT_ALL) {
+            for (const t of graph.getAllTasks()) {
+              const rec = runState.tasks[t.id];
+              if (rec && (rec.status === 'PENDING' || rec.status === 'READY')) {
+                rec.status = 'CANCELLED';
+              }
+            }
+          }
+
+          runState.activeTaskIds = [];
+          runState.updatedAt = new Date().toISOString();
+          await this.runStateStore.saveRunState(projectPath, runState);
+
+          await this.workspaceStrategy.cleanupWorkspace(ctx);
+
+          if (decision === FailureDecision.ABORT_ALL) {
+            runState.status = 'FAILED';
+            runState.updatedAt = new Date().toISOString();
+            await this.runStateStore.saveRunState(projectPath, runState);
+            break;
+          }
+        }
       } else {
         await this.workspaceStrategy.rollbackWorkspace(ctx, baseCommit);
 

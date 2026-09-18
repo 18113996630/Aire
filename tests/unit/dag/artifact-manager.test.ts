@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ArtifactManager } from '../../../src/dag/artifact-manager.ts';
+import { ArtifactManager, extractSwiftApiContracts } from '../../../src/dag/artifact-manager.ts';
 import type { IArtifactManager } from '../../../src/dag/artifact-manager.interface.ts';
 import type { TaskNode, TaskResult } from '../../../src/dag/types.ts';
 
@@ -71,13 +71,17 @@ describe('ArtifactManager', () => {
       assert.equal(result, null);
     });
 
-    test('getTaskResult returns null when result.json is invalid/corrupted', async () => {
+    test('getTaskResult throws Error when result.json is invalid/corrupted', async () => {
       const taskDir = path.join(tempDir, '.aire', 'tasks', 'corrupted-task');
       await fs.mkdir(taskDir, { recursive: true });
       await fs.writeFile(path.join(taskDir, 'result.json'), '{ invalid json content ...', 'utf-8');
 
-      const result = await artifactManager.getTaskResult(tempDir, 'corrupted-task');
-      assert.equal(result, null);
+      await assert.rejects(
+        async () => {
+          await artifactManager.getTaskResult(tempDir, 'corrupted-task');
+        },
+        /Corrupted task result at/
+      );
     });
   });
 
@@ -193,6 +197,66 @@ describe('ArtifactManager', () => {
 
       const finalLoaded = await artifactManager.getTaskResult(tempDir, sampleTask.id);
       assert.deepEqual(finalLoaded, res2);
+    });
+
+    test('extracts Swift API contracts when Swift files exist on disk', async () => {
+      const baseCommit = '1111111111111111111111111111111111111111';
+      const commit = '2222222222222222222222222222222222222222';
+      const swiftFile = path.join(tempDir, 'Models/Item.swift');
+      await fs.mkdir(path.dirname(swiftFile), { recursive: true });
+      await fs.writeFile(
+        swiftFile,
+        `import Foundation\n\npublic struct Item: Identifiable, Codable {\n    let id: UUID\n}\n\nprotocol ItemStore {\n    func fetch() -> [Item]\n}\n`,
+        'utf-8'
+      );
+
+      const reconstructed = await artifactManager.reconstructTaskResult(
+        tempDir,
+        sampleTask,
+        baseCommit,
+        commit,
+        ['Models/Item.swift']
+      );
+
+      assert.deepEqual(reconstructed.apiContracts, [
+        'public struct Item: Identifiable, Codable',
+        'protocol ItemStore',
+      ]);
+    });
+  });
+
+  describe('extractSwiftApiContracts', () => {
+    test('extracts struct, class, enum, protocol, and typealias definitions cleanly', async () => {
+      const swiftFile = path.join(tempDir, 'Test.swift');
+      await fs.writeFile(
+        swiftFile,
+        `
+// Comments should be ignored
+struct InternalModel {
+}
+
+public final class AuthService: ObservableObject {
+}
+
+enum NetworkError: Error {
+}
+
+protocol ServiceProtocol {
+}
+
+public typealias AuthToken = String
+`,
+        'utf-8'
+      );
+
+      const contracts = await extractSwiftApiContracts(tempDir, ['Test.swift']);
+      assert.deepEqual(contracts, [
+        'struct InternalModel',
+        'public final class AuthService: ObservableObject',
+        'enum NetworkError: Error',
+        'protocol ServiceProtocol',
+        'public typealias AuthToken = String',
+      ]);
     });
   });
 });
