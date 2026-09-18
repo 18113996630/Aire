@@ -110,7 +110,7 @@ aire/
 │   ├── ios/                              # [NEW] iOS 设施驱动抽象层
 │   │   ├── simulator-manager.ts          # xcrun simctl 封装（boot, install, launch, screenshot, terminate）
 │   │   └── types.ts                      # 设备状态、命令响应类型
-│   ├── runtime/                          # ICliAdapter 体系（OpenCodeCliAdapter, MockCliAdapter）
+│   ├── runtime/                          # ICliAdapter 体系（Codex, Antigravity, Cursor, Mock）
 │   └── vcs/                              # GitManager 安全提交与原子回滚
 ├── tools/
 │   └── refkit.py                         # 测量算法内核（纯色平铺、墨水核、发丝求解、探针批处理）

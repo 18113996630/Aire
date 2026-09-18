@@ -15,7 +15,7 @@
 
 # 1. 项目背景
 
-随着 Codex CLI、Claude Code、Gemini CLI、OpenCode 等 Coding Agent 的发展，AI 已经能够完成越来越多的软件开发任务。
+随着 Codex、Antigravity、Cursor 等 Coding Agent 的发展，AI 已经能够完成越来越多的软件开发任务。
 
 但当前典型使用方式仍然是：
 
@@ -46,7 +46,7 @@ AI 修改
 5. UI 是否符合设计目标，缺乏自动评审能力。
 6. AI 很少真正操作 Simulator 验证完整用户流程。
 7. 出现问题后，需要人工把问题重新描述给 AI。
-8. Codex、Claude Code、Gemini CLI 等工具之间缺少统一编排层。
+8. Codex、Antigravity、Cursor 等工具之间缺少统一编排层。
 
 因此，本项目希望构建一个：
 
@@ -88,7 +88,7 @@ Simulator
 
 # 2. 产品定位
 
-AIRE 不负责替代 Codex、Claude Code 等 Coding Agent。
+AIRE 不负责替代 Codex、Antigravity、Cursor 等 Coding Agent。
 
 它更像：
 
@@ -111,13 +111,8 @@ AIRE 不负责替代 Codex、Claude Code 等 Coding Agent。
 
 ```text
 Codex CLI
-Claude Code
-Gemini CLI
-OpenCode
-Cursor Agent
 Antigravity
-Aider
-...
+Cursor Agent
 ```
 
 因此整体架构是：
@@ -136,7 +131,7 @@ Aider
                      │
        ┌─────────────┼─────────────┐
        ↓             ↓             ↓
-     Codex        Claude         Gemini
+     Codex      Antigravity     Cursor
 ```
 
 ---
@@ -592,11 +587,8 @@ resume()
 
 ```text
 CodexRuntime
-ClaudeRuntime
-GeminiRuntime
-OpenCodeRuntime
-CursorRuntime
 AntigravityRuntime
+CursorRuntime
 ```
 
 都实现统一接口。
@@ -618,7 +610,7 @@ Agent
  ↓
 AIRuntime
  ↓
-Claude Code
+Antigravity / Cursor
 ```
 
 这样 Planner 根本不需要知道具体使用什么 CLI。
@@ -1205,9 +1197,8 @@ aire/
 │
 ├── Runtime/
 │   ├── Codex/
-│   ├── Claude/
-│   ├── Gemini/
-│   └── OpenCode/
+│   ├── Antigravity/
+│   └── Cursor/
 │
 ├── Evaluator/
 │   ├── Build/
@@ -1741,7 +1732,7 @@ Agent Runtime:
 CLI Adapter
 
 AI:
-Codex / Claude / Gemini / OpenCode
+Codex / Antigravity / Cursor
 
 Project:
 Git
@@ -1795,7 +1786,7 @@ AIRE 能够：
 * 自动生成 Spec
 * 自动拆解 Task
 * 自动选择 Agent
-* 自动调用 Codex/Claude Code
+* 自动调用 Codex / Antigravity / Cursor
 * 自动修改代码
 * 自动 Git commit
 * 自动执行 `xcodebuild`

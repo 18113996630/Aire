@@ -23,7 +23,7 @@
 
 ### 1.3 验收条件（Acceptance Criteria）
 1. 提供统一 CLI 入口：`aire run --task "<任务描述>" --project "<工程路径>"`。
-2. 成功集成至少一个本地 Coding CLI（默认接入 `OpenCode`），支持下发需求改写本地 iOS 工程源码。
+2. 成功集成统一 Coding CLI 适配体系（后续支持 Codex / Antigravity / Cursor），支持下发需求改写本地 iOS 工程源码。
 3. 自动执行 `xcodebuild`，实现毫秒级清洗冗余日志并结构化输出 Swift 编译错误（含文件路径、行号、错误信息）。
 4. 当编译报错时，自动触发修复流程（Fix Loop），将结构化错误精准回传给 AI CLI，限制最大重试次数（默认 3 次）。
 5. 修复成功后自动生成 Git Commit；若超过重试上限仍未成功，自动执行 Git 回滚保护工作区代码。
@@ -48,7 +48,9 @@ aire/
 │   │   └── types.ts             # 核心公共类型定义
 │   ├── runtime/                 # AI Coding CLI 运行时适配器
 │   │   ├── adapter.interface.ts # ICliAdapter 抽象接口
-│   │   ├── opencode.adapter.ts  # OpenCode 本地 CLI 驱动实现
+│   │   ├── codex.adapter.ts     # Codex 本地 CLI 驱动实现
+│   │   ├── antigravity.adapter.ts # Antigravity CLI 驱动实现
+│   │   ├── cursor.adapter.ts    # Cursor 本地 CLI 驱动实现
 │   │   └── mock.adapter.ts      # 零 Token 测试用 Mock 适配器
 │   ├── evaluator/               # 验证与评估引擎
 │   │   ├── evaluator.interface.ts # IEvaluator 统一抽象接口
@@ -216,7 +218,9 @@ export interface ICliAdapter {
 ```
 
 ### 5.2 适配器实现规范
-- **`OpenCodeCliAdapter`**：执行 `opencode run "<prompt>"`（非交互脚本模式），捕获标准输出和异常。
+- **`CodexCliAdapter`**：执行 Codex CLI 无头脚本模式命令，捕获标准输出和异常。
+- **`AntigravityCliAdapter`**：执行 Antigravity（如 `agy` CLI）无头脚本命令，管理生命周期与异常。
+- **`CursorCliAdapter`**：对接 Cursor Agent CLI 驱动，执行代码修改指令并捕获退出码。
 - **`MockCliAdapter`**：内存级预制行为适配器，支持设定不同 iteration 的代码修改模拟结果，供自动化测试高速重演。
 
 ---
@@ -249,4 +253,4 @@ export interface ICliAdapter {
 2. **Layer 2: Integration Tests（集成测试）**：
    - 结合 `MockCliAdapter`，模拟首轮写入语法错误代码、次轮修复正确的端到端自愈流转。
 3. **Layer 3: E2E Live Tests（真实环境端到端验证）**：
-   - 调用真实 `OpenCode` 对测试靶场下发新增 UI 控件需求，验证全流程自动执行与最终 Commit 结果。
+   - 调用真实 Coding CLI（Codex / Antigravity / Cursor）对测试靶场下发新增 UI 控件需求，验证全流程自动执行与最终 Commit 结果。

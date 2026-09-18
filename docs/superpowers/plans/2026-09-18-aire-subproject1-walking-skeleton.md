@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript, Node.js (v25+), Commander.js, Native `node:test` + `node:assert`, Git, Xcode (`xcodebuild`).
 
+> **注意（Runtime 矩阵调整）：** 系统已根据最新架构决策移除 OpenCode 支持，统一支持 **Codex**、**Antigravity** 和 **Cursor** 作为标准 Coding Agent Runtime。
+
 **Spec:** [`docs/superpowers/specs/2026-09-18-aire-subproject1-walking-skeleton-design.md`](../specs/2026-09-18-aire-subproject1-walking-skeleton-design.md)
 
 ## Global Constraints
