@@ -50,14 +50,30 @@ export class ArtifactManager implements IArtifactManager {
   }
 
   /**
-   * Persist structured task result to .aire/tasks/<taskId>/result.json
+   * Persist structured task result to .aire/tasks/<taskId>/result.json atomically:
+   * 1. Ensure directory exists.
+   * 2. Write to result.json.tmp.
+   * 3. Call fsync to guarantee disk persistence.
+   * 4. Rename result.json.tmp to result.json atomically.
    */
   async saveTaskResult(projectPath: string, result: TaskResult): Promise<void> {
     const filePath = this.getTaskResultPath(projectPath, result.taskId);
     const dirPath = path.dirname(filePath);
 
     await fs.mkdir(dirPath, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(result, null, 2) + '\n', 'utf-8');
+
+    const tmpPath = path.join(dirPath, 'result.json.tmp');
+    const content = JSON.stringify(result, null, 2) + '\n';
+
+    const fileHandle = await fs.open(tmpPath, 'w');
+    try {
+      await fileHandle.writeFile(content, 'utf-8');
+      await fileHandle.sync();
+    } finally {
+      await fileHandle.close();
+    }
+
+    await fs.rename(tmpPath, filePath);
   }
 
   /**

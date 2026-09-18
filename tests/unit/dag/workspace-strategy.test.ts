@@ -353,10 +353,45 @@ describe('SerialWorkspaceStrategy', () => {
     const excludeContent = readFileSync(join(testRepoDir, '.git', 'info', 'exclude'), 'utf-8');
     assert.match(excludeContent, /\.aire\//);
 
-    // Calling again is idempotent and does not duplicate
+    // Calling again is idempotent and does not duplicate (re-read from disk)
     await strategy.prepareWorkspace(ctx);
-    const count = (excludeContent.match(/\.aire\//g) || []).length;
+    const excludeContentAfter = readFileSync(join(testRepoDir, '.git', 'info', 'exclude'), 'utf-8');
+    const count = (excludeContentAfter.match(/\.aire\//g) || []).length;
     assert.equal(count, 1);
+  });
+
+  test('verifyCommitBelongsToTask rejects commit when parent is not expectedBaseCommit despite matching trailer', async () => {
+    const ctx: WorkspaceContext = {
+      projectPath: testRepoDir,
+      taskId: 'task-forged-parent',
+      runId: 'run-006',
+      allowedFiles: ['README.md']
+    };
+
+    const baseCommit = await strategy.getCurrentHead(ctx);
+
+    // Make an intermediate commit
+    writeFileSync(join(testRepoDir, 'intermediate.txt'), 'intermediate\n');
+    execSync('git add intermediate.txt && git commit -m "intermediate commit"', { cwd: testRepoDir });
+
+    // Now make a commit on top of intermediate commit, but forge AIRE-Base-Commit pointing to baseCommit
+    writeFileSync(join(testRepoDir, 'README.md'), '# Forged\n');
+    execSync(
+      `git add README.md && git commit -m "Forged commit\n\nAIRE-Task-Id: task-forged-parent\nAIRE-Run-Id: run-006\nAIRE-Base-Commit: ${baseCommit}"`,
+      { cwd: testRepoDir }
+    );
+    const forgedCommitSha = await strategy.getCurrentHead(ctx);
+
+    // Verify: Trailer says baseCommit, but parent commit is intermediateSha, not baseCommit!
+    const result = await strategy.verifyCommitBelongsToTask(
+      testRepoDir,
+      forgedCommitSha,
+      'task-forged-parent',
+      'run-006',
+      baseCommit
+    );
+
+    assert.equal(result, false, 'Should reject commit whose git parent does not match expectedBaseCommit');
   });
 });
 

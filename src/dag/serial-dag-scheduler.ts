@@ -40,6 +40,22 @@ export class WorkspaceInconsistentError extends Error {
   }
 }
 
+export class MissingTaskResultError extends Error {
+  readonly taskId?: string;
+  readonly dependencyId?: string;
+
+  constructor(messageOrDependencyId: string, taskId?: string) {
+    if (taskId !== undefined) {
+      super(`Missing task result for dependency "${messageOrDependencyId}" required by task "${taskId}"`);
+      this.dependencyId = messageOrDependencyId;
+      this.taskId = taskId;
+    } else {
+      super(messageOrDependencyId);
+    }
+    this.name = 'MissingTaskResultError';
+  }
+}
+
 export { GraphDriftError };
 
 export interface SerialDagSchedulerOptions {
@@ -381,11 +397,42 @@ export class SerialDagScheduler implements IScheduler {
       runState.updatedAt = new Date().toISOString();
       await this.runStateStore.saveRunState(projectPath, runState);
 
-      // Load direct dependency results
-      const dependencyResults = await this.artifactManager.getDirectDependencyResults(
-        projectPath,
-        task.dependencies
-      );
+      // Load direct dependency results with reconciliation and strict consistency check
+      const dependencyResults: TaskResult[] = [];
+      for (const depId of task.dependencies) {
+        let depResult = await this.artifactManager.getTaskResult(projectPath, depId);
+        if (!depResult) {
+          const depRecord = runState.tasks[depId];
+          const depNode = graph.getTask(depId);
+          if (depRecord && depRecord.status === 'SUCCEEDED' && depNode) {
+            const depBaseCommit = depRecord.baseCommit ?? '';
+            const depCommit = depRecord.commit ?? depBaseCommit;
+            const depCtx: WorkspaceContext = {
+              projectPath,
+              taskId: depId,
+              runId: runState.runId,
+              allowedFiles: depNode.allowed_files,
+            };
+            const depChangedFiles =
+              depBaseCommit && depCommit && depBaseCommit !== depCommit
+                ? await this.workspaceStrategy.extractChangedFiles(depCtx, depBaseCommit)
+                : [];
+            depResult = await this.artifactManager.reconstructTaskResult(
+              projectPath,
+              depNode,
+              depBaseCommit,
+              depCommit,
+              depChangedFiles
+            );
+            depRecord.resultPath = `.aire/tasks/${depId}/result.json`;
+          }
+        }
+
+        if (!depResult) {
+          throw new MissingTaskResultError(depId, taskId);
+        }
+        dependencyResults.push(depResult);
+      }
 
       // State change callback hook for real-time WAL persistence
       const onStateChange = async (status: TaskExecutionStatus) => {
@@ -409,6 +456,7 @@ export class SerialDagScheduler implements IScheduler {
       taskReports[taskId] = outcome;
 
       if (outcome.success) {
+        let commitSucceeded = false;
         try {
           const commitMeta: CommitMetadata = {
             runId: runState.runId,
@@ -449,8 +497,7 @@ export class SerialDagScheduler implements IScheduler {
           runState.activeTaskIds = [];
           runState.updatedAt = new Date().toISOString();
           await this.runStateStore.saveRunState(projectPath, runState);
-
-          await this.workspaceStrategy.cleanupWorkspace(ctx);
+          commitSucceeded = true;
         } catch (commitErr: any) {
           await this.workspaceStrategy.rollbackWorkspace(ctx, baseCommit);
 
@@ -494,6 +541,15 @@ export class SerialDagScheduler implements IScheduler {
             runState.updatedAt = new Date().toISOString();
             await this.runStateStore.saveRunState(projectPath, runState);
             break;
+          }
+        }
+
+        if (commitSucceeded) {
+          try {
+            await this.workspaceStrategy.cleanupWorkspace(ctx);
+          } catch (cleanupErr: any) {
+            // Post-commit resource cleanup failure must not trigger task rollback
+            console.warn(`[AIRE] Warning: cleanupWorkspace failed for task ${taskId}:`, cleanupErr?.message ?? cleanupErr);
           }
         }
       } else {

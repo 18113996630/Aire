@@ -46,6 +46,11 @@ program
       process.exit(1);
     }
 
+    if (options.retryTask && !options.resume) {
+      console.error('❌ [AIRE] Error: --retry-task requires --resume.');
+      process.exit(1);
+    }
+
     // 2. DAG Execution Mode
     if (options.taskGraph || options.resume) {
       const taskGraphPath = options.taskGraph ? resolve(process.cwd(), options.taskGraph) : undefined;
@@ -129,7 +134,6 @@ program
 
           console.log(`\n🚀 [AIRE] Initializing DAG execution from: ${taskGraphPath}`);
           console.log(`📁 Project: ${projectPath}`);
-          if (options.retryTask) console.log(`🔁 Retry Task: ${options.retryTask}`);
           console.log();
 
           const yamlContent = await fs.readFile(taskGraphPath, 'utf-8');
@@ -145,7 +149,6 @@ program
           report = await scheduler.run(graph, {
             projectPath,
             maxConcurrency: 1,
-            retryTaskId: options.retryTask,
           });
         }
 

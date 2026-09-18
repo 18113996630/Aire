@@ -60,6 +60,21 @@ describe('CLI: aire run options and validation', () => {
       assert.match(output, /Option -p, --project is required/);
     }
   });
+
+  test('bin/aire.ts run fails with error when --retry-task is given without --resume', async () => {
+    try {
+      await execFileAsync(
+        nodeBin,
+        ['--experimental-strip-types', cliPath, 'run', '--task-graph', 'task-graph.yaml', '--retry-task', 'task-a'],
+        { encoding: 'utf8', cwd: repoRoot }
+      );
+      assert.fail('Expected process to exit with non-zero code');
+    } catch (err: any) {
+      assert.strictEqual(err.code, 1);
+      const output = (err.stdout ?? '') + (err.stderr ?? '');
+      assert.match(output, /--retry-task requires --resume/);
+    }
+  });
 });
 
 describe('CLI: E2E DAG Execution with MiniApp fixture', () => {

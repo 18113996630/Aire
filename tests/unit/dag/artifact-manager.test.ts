@@ -83,6 +83,20 @@ describe('ArtifactManager', () => {
         /Corrupted task result at/
       );
     });
+
+    test('saveTaskResult writes atomically without leaving tmp files', async () => {
+      await artifactManager.saveTaskResult(tempDir, sampleResult);
+
+      const taskDir = path.join(tempDir, '.aire', 'tasks', sampleResult.taskId);
+      const targetPath = path.join(taskDir, 'result.json');
+      const tmpPath = path.join(taskDir, 'result.json.tmp');
+
+      const targetExists = await fs.stat(targetPath).then(() => true).catch(() => false);
+      const tmpExists = await fs.stat(tmpPath).then(() => true).catch(() => false);
+
+      assert.equal(targetExists, true);
+      assert.equal(tmpExists, false);
+    });
   });
 
   describe('getDirectDependencyResults', () => {

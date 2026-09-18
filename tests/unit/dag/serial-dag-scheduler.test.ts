@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import {
   SerialDagScheduler,
-  WorkspaceInconsistentError
+  WorkspaceInconsistentError,
+  MissingTaskResultError,
 } from '../../../src/dag/serial-dag-scheduler.ts';
 import { TaskGraph } from '../../../src/dag/task-graph.ts';
 import { RunStateStore, GraphDriftError } from '../../../src/dag/run-state-store.ts';
@@ -791,6 +792,121 @@ tasks:
     assert.ok(taskAResult);
     assert.deepEqual(taskAResult.apiContracts, ['struct User: Codable', 'protocol UserStore']);
     assert.deepEqual(taskAResult.artifacts, ['docs/architecture.md']);
+  });
+
+  test('Case 11: cleanupWorkspace failure after successful commit does not rollback commit or fail the task', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    let rollbackCalled = false;
+    let cleanupCalled = false;
+
+    const workspaceStrategy = createMockWorkspaceStrategy({
+      cleanupWorkspace: async () => {
+        cleanupCalled = true;
+        throw new Error('Worktree cleanup failed (disk IO or lock error)');
+      },
+      rollbackWorkspace: async () => {
+        rollbackCalled = true;
+      },
+    });
+
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+    const taskRunner = createMockTaskRunner({
+      'task-a': { success: true },
+      'task-b': { success: true },
+    });
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    const report = await scheduler.run(graph, { projectPath: '/mock/project' });
+
+    assert.equal(cleanupCalled, true);
+    assert.equal(rollbackCalled, false, 'Rollback should never be called when cleanupWorkspace fails after commit');
+    assert.equal(report.status, 'SUCCEEDED');
+    assert.deepEqual(report.completedTasks, ['task-a', 'task-b']);
+    assert.equal(runStateStore.state?.tasks['task-a']?.status, 'SUCCEEDED');
+    assert.equal(runStateStore.state?.tasks['task-b']?.status, 'SUCCEEDED');
+  });
+
+  test('Case 12: Missing dependency TaskResult for SUCCEEDED task triggers reconstruct', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    const workspaceStrategy = createMockWorkspaceStrategy();
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+
+    let reconstructCalledFor: string | null = null;
+    const originalReconstruct = artifactManager.reconstructTaskResult;
+    artifactManager.reconstructTaskResult = async (projectPath, task, baseCommit, commit, changedFiles) => {
+      reconstructCalledFor = task.id;
+      return originalReconstruct(projectPath, task, baseCommit, commit, changedFiles);
+    };
+
+    const taskRunner = createMockTaskRunner({
+      'task-a': { success: true },
+      'task-b': { success: true },
+    });
+
+    // We simulate that task-a finishes, but right before task-b runs, task-a's result is deleted from artifactManager
+    const originalSave = artifactManager.saveTaskResult;
+    artifactManager.saveTaskResult = async (projectPath, result) => {
+      await originalSave(projectPath, result);
+      if (result.taskId === 'task-a') {
+        artifactManager.results.delete('task-a');
+      }
+    };
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    const report = await scheduler.run(graph, { projectPath: '/mock/project' });
+    assert.equal(reconstructCalledFor, 'task-a', 'Should have reconstructed missing task-a result');
+    assert.equal(report.status, 'SUCCEEDED');
+  });
+
+  test('Case 13: Throws MissingTaskResultError when dependency TaskResult cannot be reconstructed', async () => {
+    const graph = TaskGraph.fromYaml(linearYaml);
+    const workspaceStrategy = createMockWorkspaceStrategy();
+    const runStateStore = createMockRunStateStore();
+    const artifactManager = createMockArtifactManager();
+
+    artifactManager.getTaskResult = async () => null;
+    artifactManager.reconstructTaskResult = async () => null as any;
+
+    const taskRunner = createMockTaskRunner({
+      'task-a': { success: true },
+      'task-b': { success: true },
+    });
+
+    const scheduler = new SerialDagScheduler({
+      workspaceStrategy,
+      runStateStore,
+      artifactManager,
+      taskRunner,
+      rawYamlContent: linearYaml,
+    });
+
+    await assert.rejects(
+      async () => {
+        await scheduler.run(graph, { projectPath: '/mock/project' });
+      },
+      (err: any) => {
+        assert.ok(err instanceof MissingTaskResultError);
+        assert.equal(err.dependencyId, 'task-a');
+        assert.equal(err.taskId, 'task-b');
+        return true;
+      }
+    );
   });
 });
 

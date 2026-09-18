@@ -193,7 +193,14 @@ export class SerialWorkspaceStrategy implements IWorkspaceStrategy {
           ['log', '-1', '--format=%(trailers:key=AIRE-Base-Commit,valueonly)', commitSha],
           projectPath
         );
-        match = baseTrailer.trim() === expectedBaseCommit;
+        if (baseTrailer.trim() !== expectedBaseCommit) {
+          return false;
+        }
+
+        // Strictly verify that the commit's first parent (HEAD^) equals expectedBaseCommit
+        const parentSha = (await this.runGit(['rev-parse', `${commitSha}^`], projectPath)).trim();
+        const resolvedExpectedBase = (await this.runGit(['rev-parse', expectedBaseCommit], projectPath)).trim();
+        match = parentSha === resolvedExpectedBase;
       }
       return match;
     } catch {
