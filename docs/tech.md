@@ -831,6 +831,10 @@ assertions:
 
 这是 AIRE 的核心差异化模块之一。
 
+> **核心参考对标项目**：`docs/reference-project/super-prototyping`
+> AIRE 的 UI 对比校验规则与 Visual QA 机制全面对标该项目（详见 [`docs/ui-verification-rules.md`](file:///Users/huangrong/Desktop/develop/tool/Aire/docs/ui-verification-rules.md)）。
+> 核心原则：**可辩护的复刻（Defensible Replica）**，所有界面度量与色彩均须溯源到测量证据（Evidence），无探针（Probe）不报缺陷。
+
 输入：
 
 ```text
@@ -841,13 +845,13 @@ actual.png
 然后：
 
 ```text
-Vision Model
+Vision Model + CV Toolkit (对标 super-prototyping refkit)
  ↓
-Layout Analysis
+Grid & Layout Calibration (Scale / Color Space 校准)
  ↓
-Difference Detection
+Difference Detection (Probe Boxes: Fills, Ink Core, Bands, Scan, Hairline)
  ↓
-Issue List
+Quantitative Issue List (Expected, Actual, Delta)
 ```
 
 输出：
@@ -859,29 +863,37 @@ issues:
 
   - type: spacing
     element: header
+    probe: [76, 120, 132, 160]
     expected: 24
     actual: 32
+    delta: 8
 
   - type: typography
     element: title
+    probe: [17, 139, 79, 152]
     expected_size: 28
     actual_size: 24
+    font_face: "SF Pro"
 
   - type: color
     element: background
+    probe: [40, 120, 300, 160]
     expected: "#F7F7F7"
     actual: "#FFFFFF"
+    delta_rgb: 8.0
 
   - type: alignment
     element: card
     severity: medium
+    expected_inset: 16
+    actual_inset: 20
 ```
 
 ---
 
 # 17. Visual Review 不应该只依赖 LLM
 
-建议使用三层：
+AIRE 借鉴 `super-prototyping` 的定量度量工具集（`refkit.py`）与视觉审阅范式，不单纯依赖 Vision LLM 的定性推断，采用三层综合验证：
 
 ```text
                     Visual QA
@@ -1453,9 +1465,10 @@ Re-test
 * **MetaGPT** → 多角色模型
 * **SWE-agent** → 修复闭环
 * **Auto-Claude** → 自动执行机制
+* **super-prototyping** (`docs/reference-project/super-prototyping`) → Visual QA 视觉比对、探针测量与像素级复刻校验标准
 * **AIRE 自研** → iOS Runtime + Visual QA + Replica Workflow
 
-建议优先研究顺序：**Legion → OpenHands → Conductor → SWE-agent → MetaGPT → Auto-Claude**。
+建议优先研究顺序：**Legion → OpenHands → super-prototyping → Conductor → SWE-agent → MetaGPT → Auto-Claude**。
 ```
 
 而 AIRE 自己重点实现：

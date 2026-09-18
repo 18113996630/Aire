@@ -198,24 +198,45 @@ Task 之间通过依赖关系形成 DAG，不允许依赖隐式聊天上下文�
 1. 启动 Simulator
 2. 执行目标操作
 3. 截图
-4. 与参考截图比较
-5. 输出视觉问题
+4. 与参考截图比较（对齐尺度并提取探针）
+5. 输出量化视觉问题列表
 6. 必要时创建 Fix Task
 
 ### Replica
 
-Replica 类任务不仅要求：
+Replica 类任务不仅要求功能正确，更要求视觉与度量的高精度还原：
 
-* 功能正确
-
-还要求：
-
-* 布局接近
-* 尺寸接近
-* 间距接近
-* 字体接近
-* 颜色接近
+* 布局一致
+* 尺寸精确
+* 间距精准
+* 字体与字重匹配
+* 颜色与色彩空间准确（基于 sRGB / P3 测量基准）
 * 动画/交互行为接近
+
+### UI 对比校验规则（对标 super-prototyping）
+
+后续所有 UI 对比、视觉 Review 与像素级复刻校验，**必须严格参考参考项目 `docs/reference-project/super-prototyping`（详见 `docs/ui-verification-rules.md`）的方法论与校验标准**：
+
+1. **可辩护的复刻（Defensible Replica）**：
+   - 界面中所有的颜色、间距、字号、圆角尺寸必须来源于真实参考截图的测量证据（Evidence），严禁主观盲猜“看起来差不多”。
+   - "No evidence, no token." / "Values that look about right are how a replica quietly stops being one."
+2. **尺度校准与色彩空间统一（Scale & Color Space）**：
+   - 采样前必须准确计算设备 capture px 与 SwiftUI pt 的缩放比（如 `@3x` 下 `393 pt -> 1179 px`），长宽比例误差须 `< 1%`。
+   - 截图前先校准色彩空间（统一转为 sRGB），避免因未标记 Display P3 与 sRGB 产生伪色差。
+3. **分层测量与证据采样（Hierarchical Sampling）**：
+   - **背景/容器填充**：在目标区域统计纯色平铺点（Flat Fills），剔除边缘抗锯齿噪声；
+   - **文本颜色**：取最深的前几个百分位墨水核（Ink Core），不能直接用众数（众数通常是背景色）；
+   - **边框与细线**：通过透光与墨量亏损（Hairline Ink Deficit）测算真实颜色与粗细，不凭直觉单点采样；
+   - **节奏与间距**：通过墨斑投影（Bands）和色彩扫描（Scan）确定组件行高、列表节拍与真实边缘坐标。
+4. **探针机制与量化容差（Probe-based Verification）**：
+   - **无探针即流言**（"A defect without a probe is a rumour"）：任何视觉缺陷报告必须提供精确的探针坐标包围盒（`probe: [x1, y1, x2, y2]`）、预期值（Ref）、实际值（Mine）与绝对差值（Delta）。
+   - **容差标准**：系统原生控件与容器的平均绝对偏差（Mean Absolute Delta）控制在 `3-7` 属于达标；纯文本字体替换区允许合理容差，禁止为了追平不可测数值而歪曲已测量的几何坐标。
+5. **审阅与修改解耦（Fan out the looking, not the editing）**：
+   - 视觉审阅与探针复现可并行分发（多任务同时比对不同页面）；
+   - 代码修复必须单点收敛（单一负责修改的 Developer Agent 执行），严禁多 Agent 混乱修改样式或直接硬编码魔数。
+6. **重测再验证闭环**：
+   - "A correction you have not re-rendered is not a correction."
+   - 任何样式与布局修改后，必须重新在 Simulator 中构建、截屏、跑探针校验，确认 Delta 收敛后方可关闭缺陷。
 
 ---
 

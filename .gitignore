@@ -1,5 +1,7 @@
 node_modules/
 dist/
 /docs/references-project/
+/docs/reference-project/*/
 .DS_Store
 .superpowers/
+.worktrees/
