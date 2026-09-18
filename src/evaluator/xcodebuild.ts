@@ -73,6 +73,8 @@ export class XcodeBuildEvaluator implements IEvaluator {
       });
 
       if (result.exitCode === 0) {
+        context.appBundlePath = `${context.projectPath}/build/Build/Products/Debug-iphonesimulator/${context.scheme}.app`;
+        context.bundleId = `com.example.${context.scheme}`;
         return {
           passed: true,
           type: 'BUILD',
