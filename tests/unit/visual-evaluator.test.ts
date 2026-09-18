@@ -237,3 +237,141 @@ test('VisualReviewEvaluator respects settleDelayMs configuration', async () => {
 
   assert.ok(screenshotTimestamp >= launchTimestamp + 40, 'Screenshot should be taken after settle delay');
 });
+
+test('VisualReviewEvaluator fails when probe delta exceeds toleranceMatrix even if passed true in report', async () => {
+  const mockSim: ISimulatorManager = {
+    findOrBootDevice: async () => 'UDID-MOCK',
+    installApp: async () => {},
+    launchApp: async () => 1234,
+    takeScreenshot: async () => {},
+    terminateApp: async () => {},
+  };
+
+  const mockRefkit: IRefkitBridge = {
+    runBatch: async (): Promise<RefkitBatchReport> => ({
+      meanDelta: 3.0,
+      passed: true,
+      probeResults: [
+        {
+          probeId: 'card-inset',
+          expected: 16.0,
+          actual: 19.5,
+          delta: 3.5, // > spacingPtMax 2.0
+          passed: true, // erroneously passed by raw refkit
+        },
+      ],
+      worstBands: [],
+    }),
+    runDiff: async () => ({ meanDelta: 3.0 }),
+  };
+
+  const evaluator = new VisualReviewEvaluator(mockSim, mockRefkit);
+  const ctx = createTaskContext({
+    taskId: 'vis-task-tol',
+    projectPath: '/test',
+    scheme: 'MiniApp',
+    taskGoal: 'Test toleranceMatrix enforcement',
+    visualConfig: {
+      referenceImagePath: '/tmp/ref.png',
+      toleranceMatrix: {
+        containerDeltaMax: 7.0,
+        spacingPtMax: 2.0,
+        textDeltaMax: 15.0,
+      },
+    },
+  });
+
+  const result = await evaluator.evaluate(ctx);
+  assert.equal(result.passed, false);
+  assert.equal(result.visualDefects?.length, 1);
+  assert.equal(result.visualDefects?.[0].category, 'spacing');
+  assert.equal(result.visualDefects?.[0].tolerance, 2.0);
+  assert.equal(result.visualDefects?.[0].delta, 3.5);
+});
+
+test('VisualReviewEvaluator fails-closed when probe generator throws', async () => {
+  const mockSim: ISimulatorManager = {
+    findOrBootDevice: async () => 'UDID-MOCK',
+    installApp: async () => {},
+    launchApp: async () => 1234,
+    takeScreenshot: async () => {},
+    terminateApp: async () => {},
+  };
+  const mockRefkit: IRefkitBridge = {
+    runBatch: async () => ({ meanDelta: 0, passed: true, probeResults: [], worstBands: [] }),
+    runDiff: async () => ({ meanDelta: 0 }),
+  };
+  const failingGenerator: any = {
+    generateProbes: async () => {
+      throw new Error('Disk IO corrupted or invalid reference image');
+    },
+  };
+
+  const evaluator = new VisualReviewEvaluator(mockSim, mockRefkit, failingGenerator);
+  const ctx = createTaskContext({
+    taskId: 'vis-task-fail-closed',
+    projectPath: '/test',
+    scheme: 'MiniApp',
+    taskGoal: 'Test probe failure fail-closed',
+    visualConfig: {
+      referenceImagePath: '/tmp/ref.png',
+      toleranceMatrix: {
+        containerDeltaMax: 7.0,
+        spacingPtMax: 2.0,
+        textDeltaMax: 15.0,
+      },
+    },
+  });
+
+  const result = await evaluator.evaluate(ctx);
+  assert.equal(result.passed, false);
+  assert.match(result.summary, /Probe generation failed/);
+});
+
+test('VisualReviewEvaluator terminates prior app instance before launch', async () => {
+  const actions: string[] = [];
+  const mockSim: ISimulatorManager = {
+    findOrBootDevice: async () => 'UDID-MOCK',
+    terminateApp: async (_u, bundle) => {
+      actions.push(`terminate:${bundle}`);
+    },
+    installApp: async () => {
+      actions.push('install');
+    },
+    launchApp: async (_u, bundle) => {
+      actions.push(`launch:${bundle}`);
+      return 1234;
+    },
+    takeScreenshot: async () => {
+      actions.push('screenshot');
+    },
+  };
+  const mockRefkit: IRefkitBridge = {
+    runBatch: async () => ({ meanDelta: 1.0, passed: true, probeResults: [], worstBands: [] }),
+    runDiff: async () => ({ meanDelta: 1.0 }),
+  };
+
+  const evaluator = new VisualReviewEvaluator(mockSim, mockRefkit);
+  const ctx = createTaskContext({
+    taskId: 'vis-task-terminate',
+    projectPath: '/test',
+    scheme: 'MiniApp',
+    taskGoal: 'Test terminate before launch',
+    visualConfig: {
+      referenceImagePath: '/tmp/ref.png',
+      toleranceMatrix: {
+        containerDeltaMax: 7.0,
+        spacingPtMax: 2.0,
+        textDeltaMax: 15.0,
+      },
+    },
+  });
+  ctx.bundleId = 'com.aire.miniapp';
+  ctx.appBundlePath = '/tmp/app.app';
+
+  await evaluator.evaluate(ctx);
+
+  assert.equal(actions[0], 'terminate:com.aire.miniapp');
+  assert.equal(actions[1], 'install');
+  assert.equal(actions[2], 'launch:com.aire.miniapp');
+});

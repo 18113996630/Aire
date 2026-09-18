@@ -146,3 +146,28 @@ test('launchApp returns 0 when output does not match pid pattern', async () => {
   assert.equal(pid, 0);
 });
 
+test('findOrBootDevice boots preferred device and waits for bootstatus even if another device is booted', async () => {
+  const executed: string[] = [];
+  const mockExec = async (cmd: string, args: string[]) => {
+    executed.push(`${cmd} ${args.join(' ')}`);
+    if (args.includes('list') && args.includes('devices')) {
+      return JSON.stringify({
+        devices: {
+          'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [
+            { udid: 'BOOTED-IPHONE-15', name: 'iPhone 15', state: 'Booted', isAvailable: true },
+            { udid: 'SHUTDOWN-IPHONE-16P', name: 'iPhone 16 Pro', state: 'Shutdown', isAvailable: true },
+          ],
+        },
+      });
+    }
+    return '';
+  };
+
+  const manager = new SimulatorManager(mockExec);
+  const udid = await manager.findOrBootDevice('iPhone 16 Pro');
+
+  assert.equal(udid, 'SHUTDOWN-IPHONE-16P');
+  assert.ok(executed.some((c) => c.includes('simctl boot SHUTDOWN-IPHONE-16P')));
+  assert.ok(executed.some((c) => c.includes('simctl bootstatus SHUTDOWN-IPHONE-16P -b')));
+});
+

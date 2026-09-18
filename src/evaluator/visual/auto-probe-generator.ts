@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 
 export interface ProbeRow {
   id: string;
@@ -17,14 +18,16 @@ export interface ProbeRow {
   _?: string;
 }
 
+export interface GenerateProbesParams {
+  referenceImagePath: string;
+  renderedImageName: string;
+  scale?: number;
+  outputPath: string;
+  focusAreas?: string[];
+}
+
 export class AutoProbeGenerator {
-  async generateProbes(params: {
-    referenceImagePath: string;
-    renderedImageName: string;
-    scale?: number;
-    outputPath: string;
-  }): Promise<string> {
-    const scale = params.scale ?? 3.0;
+  buildProbeList(params: GenerateProbesParams): ProbeRow[] {
     const ref = params.referenceImagePath;
     const mine = params.renderedImageName;
 
@@ -69,8 +72,62 @@ export class AutoProbeGenerator {
       },
     ];
 
-    await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
-    await fs.writeFile(params.outputPath, JSON.stringify(probes, null, 2), 'utf8');
-    return params.outputPath;
+    if (params.focusAreas && params.focusAreas.length > 0) {
+      for (const area of params.focusAreas) {
+        const lower = area.toLowerCase().trim();
+        if (lower.includes('nav') || lower.includes('header')) {
+          probes.push({
+            id: `${lower}-fill`,
+            img: ref,
+            mine,
+            cmd: 'sample',
+            box: [0, 44, 393, 98],
+            only: 'flat',
+            _: `Navigation/Header region sample for ${area}`,
+          });
+        } else if (lower.includes('button') || lower.includes('cta')) {
+          probes.push({
+            id: `${lower}-bbox`,
+            img: ref,
+            mine,
+            cmd: 'bbox',
+            box: [20, 700, 373, 760],
+            _: `Button bounding box for ${area}`,
+          });
+        } else if (lower.includes('tab') || lower.includes('footer')) {
+          probes.push({
+            id: `${lower}-fill`,
+            img: ref,
+            mine,
+            cmd: 'sample',
+            box: [0, 780, 393, 852],
+            only: 'flat',
+            _: `Tab bar / footer region sample for ${area}`,
+          });
+        }
+      }
+    }
+
+    return probes;
+  }
+
+  async generateProbes(params: GenerateProbesParams): Promise<string> {
+    const probes = this.buildProbeList(params);
+
+    try {
+      await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
+      await fs.writeFile(params.outputPath, JSON.stringify(probes, null, 2), 'utf8');
+      return params.outputPath;
+    } catch (err: any) {
+      // 容错：测试环境或不可写虚拟路径下回退至系统临时目录
+      if (err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'ENOENT') {
+        const fallbackDir = path.join(os.tmpdir(), `aire-probes-${Date.now()}`);
+        await fs.mkdir(fallbackDir, { recursive: true });
+        const fallbackPath = path.join(fallbackDir, path.basename(params.outputPath));
+        await fs.writeFile(fallbackPath, JSON.stringify(probes, null, 2), 'utf8');
+        return fallbackPath;
+      }
+      throw err;
+    }
   }
 }

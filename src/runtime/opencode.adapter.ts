@@ -6,15 +6,30 @@ export class OpenCodeCliAdapter implements ICliAdapter {
   private binPath: string;
 
   constructor(binPath?: string) {
-    this.binPath = binPath ?? '/Users/huangrong/.opencode/bin/opencode';
+    this.binPath = binPath ?? process.env.OPENCODE_BIN ?? 'opencode';
   }
 
   async isAvailable(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const child = spawn(this.binPath, ['--version']);
-      child.on('error', () => resolve(false));
-      child.on('close', (code) => resolve(code === 0));
-    });
+    const testBin = (bin: string): Promise<boolean> =>
+      new Promise((resolve) => {
+        const child = spawn(bin, ['--version']);
+        child.on('error', () => resolve(false));
+        child.on('close', (code) => resolve(code === 0));
+      });
+
+    if (await testBin(this.binPath)) {
+      return true;
+    }
+
+    if (this.binPath === 'opencode' && process.env.HOME) {
+      const fallback = `${process.env.HOME}/.opencode/bin/opencode`;
+      if (await testBin(fallback)) {
+        this.binPath = fallback;
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async execute(params: CliExecuteParams): Promise<CliExecutionResult> {

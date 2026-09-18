@@ -7,12 +7,8 @@ import type { IWorkspaceStrategy } from './workspace-strategy.interface.ts';
 
 const execFileAsync = promisify(execFile);
 
-export class DirtyWorkspaceError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DirtyWorkspaceError';
-  }
-}
+import { DirtyWorkspaceError } from '../vcs/git-manager.ts';
+export { DirtyWorkspaceError };
 
 export class DisallowedFilesError extends Error {
   readonly disallowedFiles: string[];

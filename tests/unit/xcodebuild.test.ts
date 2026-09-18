@@ -46,4 +46,34 @@ describe('XcodeBuildEvaluator', () => {
     assert.equal(result.passed, true);
     assert.equal(result.errors.length, 0);
   });
+
+  test('evaluate passes -derivedDataPath and resolves real bundle identifier', async () => {
+    let capturedArgs: string[] = [];
+    const mockRunner = async (params: { command: string; args: string[] }) => {
+      capturedArgs = params.args;
+      return {
+        exitCode: 0,
+        stdout: `** BUILD SUCCEEDED **`,
+        stderr: ''
+      };
+    };
+
+    const evaluator = new XcodeBuildEvaluator({
+      runner: mockRunner,
+      bundleIdResolver: async () => 'com.aire.miniapp'
+    });
+    const ctx = createTaskContext({
+      taskId: 'T-003',
+      projectPath: '/test/myproject',
+      scheme: 'MiniApp',
+      taskGoal: 'test real bundle id'
+    });
+
+    const result = await evaluator.evaluate(ctx);
+    assert.equal(result.passed, true);
+    assert.ok(capturedArgs.includes('-derivedDataPath'));
+    const ddIdx = capturedArgs.indexOf('-derivedDataPath');
+    assert.equal(capturedArgs[ddIdx + 1], '/test/myproject/.aire/build');
+    assert.equal(ctx.bundleId, 'com.aire.miniapp');
+  });
 });

@@ -49,4 +49,24 @@ describe('GitManager', () => {
     await git.hardReset(initialSha);
     assert.equal(await git.getHeadSha(), initialSha);
   });
+
+  test('assertClean throws DirtyWorkspaceError when working directory is dirty', async () => {
+    const git = new GitManager(testRepoDir);
+    writeFileSync(join(testRepoDir, 'Dirty.swift'), '// dirty');
+    await assert.rejects(async () => {
+      await git.assertClean();
+    }, /Working directory is dirty/);
+  });
+
+  test('commits message containing quotes, newlines, and shell characters safely without injection', async () => {
+    const git = new GitManager(testRepoDir);
+    writeFileSync(join(testRepoDir, 'Safe.swift'), '// safe');
+    const complexMsg = 'feat: "hello" `touch /tmp/injected` $(echo evil) \n multi-line';
+    const sha = await git.commitChanges(complexMsg);
+    assert.match(sha, /^[a-f0-9]{40}$/);
+
+    const logMsg = execSync('git log -1 --pretty=%B', { cwd: testRepoDir }).toString();
+    assert.ok(logMsg.includes('`touch /tmp/injected`'));
+    assert.ok(logMsg.includes('$(echo evil)'));
+  });
 });

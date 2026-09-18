@@ -84,25 +84,36 @@ export class RefkitBridge implements IRefkitBridge {
         continue;
       }
 
-      // 匹配表格行：probe ref mine delta (<-- off)?
+      // 匹配表格行：probe ref mine delta (<-- off)? 或 differs / ERROR
       const parts = trimmed.split(/\s+/);
-      if (parts.length >= 4 && parts[0] !== 'probe' && parts[0] !== 'mean') {
+      if (
+        parts.length >= 3 &&
+        parts[0] !== 'probe' &&
+        parts[0] !== 'id' &&
+        parts[0] !== 'mean' &&
+        parts[0] !== 'colour' &&
+        parts[0] !== 'box' &&
+        !trimmed.startsWith('--')
+      ) {
         const id = parts[0];
         const refVal = parts[1];
         const mineVal = parts[2];
-        const delta = parseFloat(parts[3]) || 0;
+        const hasDiffers = trimmed.includes('differs');
+        const hasError = trimmed.includes('ERROR:');
         const isOff = trimmed.includes('<-- off');
+        const delta = parts[3] && !isNaN(parseFloat(parts[3])) ? parseFloat(parts[3]) : (hasDiffers ? 999.0 : 0);
+        const passed = !isOff && !hasDiffers && !hasError;
         probeResults.push({
           probeId: id,
           expected: isNaN(Number(refVal)) ? refVal : Number(refVal),
           actual: isNaN(Number(mineVal)) ? mineVal : Number(mineVal),
           delta,
-          passed: !isOff,
+          passed,
         });
       }
     }
 
-    const allPassed = probeResults.every((p) => p.passed) && (meanDelta <= 7.0 || probeResults.length > 0);
+    const allPassed = probeResults.every((p) => p.passed) && meanDelta <= 7.0;
 
     return {
       meanDelta,

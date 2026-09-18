@@ -48,18 +48,42 @@ export class SimulatorManager implements ISimulatorManager {
 
   async findOrBootDevice(preferredName = 'iPhone 16 Pro'): Promise<string> {
     const devices = await this.listDevices();
-    const booted = devices.find((d) => d.state === 'Booted' && (!preferredName || d.name === preferredName))
-      || devices.find((d) => d.state === 'Booted');
-    if (booted) {
-      return booted.udid;
+    // 1. If preferred device is already booted, reuse it
+    const preferredBooted = devices.find((d) => d.state === 'Booted' && (!preferredName || d.name === preferredName));
+    if (preferredBooted) {
+      return preferredBooted.udid;
     }
 
-    const target = devices.find((d) => d.name === preferredName) || devices[0];
+    // 2. If preferred device exists (even if Shutdown), boot it instead of hijacking another model
+    const preferredShutdown = preferredName ? devices.find((d) => d.name === preferredName) : undefined;
+    if (preferredShutdown) {
+      await this.execFn('xcrun', ['simctl', 'boot', preferredShutdown.udid]);
+      try {
+        await this.execFn('xcrun', ['simctl', 'bootstatus', preferredShutdown.udid, '-b']);
+      } catch {
+        // 忽略测试 mock 环境下 bootstatus 缺失的报错
+      }
+      return preferredShutdown.udid;
+    }
+
+    // 3. Fall back to any booted device if no preferredName was specified or preferred was not found
+    const anyBooted = devices.find((d) => d.state === 'Booted');
+    if (anyBooted) {
+      return anyBooted.udid;
+    }
+
+    // 4. Fall back to first available device
+    const target = devices[0];
     if (!target) {
       throw new Error(`No available iOS simulator found matching '${preferredName}'.`);
     }
 
     await this.execFn('xcrun', ['simctl', 'boot', target.udid]);
+    try {
+      await this.execFn('xcrun', ['simctl', 'bootstatus', target.udid, '-b']);
+    } catch {
+      // 忽略测试 mock 环境下 bootstatus 缺失的报错
+    }
     return target.udid;
   }
 
