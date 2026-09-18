@@ -82,7 +82,7 @@ export class VisualReviewEvaluator implements IEvaluator {
       .map((p) => ({
         id: p.probeId,
         severity: 'high' as const,
-        category: (p.probeId.includes('inset') ? 'spacing' : 'color') as const,
+        category: (p.probeId.includes('inset') ? 'spacing' : 'color') as 'spacing' | 'color',
         element: p.probeId,
         probeBox: [0, 0, 100, 100] as [number, number, number, number],
         expected: p.expected,
