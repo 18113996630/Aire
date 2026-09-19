@@ -27,6 +27,34 @@ export function buildFixPrompt(
     };
   }
 
+  if (lastResult.type === 'FLOW_INTERACTIVE') {
+    const stateDefectLines = (lastResult.stateDefects || []).map((d, i) => {
+      return `${i + 1}. [步骤 ${d.stepId}] 类别: ${d.category}
+   - 目标标识符: ${d.targetIdentifier ?? 'N/A'}
+   - 期望状态: ${d.expected}
+   - 实际状态: ${d.actual}
+   - 诊断信息: ${d.message}`;
+    }).join('\n\n');
+
+    const visualDefectLines = (lastResult.visualDefects || []).map((defect, index) => {
+      return `${index + 1}. [${defect.element}] 探针 \`${defect.id}\` (区域: [${defect.probeBox.join(', ')}] pt)
+   - 期望参考值: ${defect.expected}
+   - 实际渲染值: ${defect.actual} (偏差 Delta: ${defect.delta}, 允许容差: ${defect.tolerance})
+   - 事实说明: ${defect.claim}`;
+    }).join('\n\n');
+
+    return `【交互流与状态视觉质检修复指令】
+在执行交互流流程时检测到状态断言失败或视觉偏差：
+
+[状态缺陷清单]
+${stateDefectLines || '- 无状态缺陷'}
+${visualDefectLines ? `\n[视觉缺陷清单]\n${visualDefectLines}\n` : ''}
+[修改指导与约束]
+1. 补充或修正缺失的 .accessibilityIdentifier(...) 全局语义契约。
+2. 修正状态流转、导航路由与控件可交互性（isEnabled / isHittable）。
+3. 修复后将自动重新执行完整 Flow 闭环重放。`;
+  }
+
   if (lastResult.type === 'VISUAL_REVIEW') {
     const defectLines = (lastResult.visualDefects || []).map((defect, index) => {
       return `${index + 1}. [${defect.element}] 探针 \`${defect.id}\` (区域: [${defect.probeBox.join(', ')}] pt)

@@ -31,13 +31,31 @@ export interface VisualDefect {
   claim: string;
 }
 
+export interface StateDefectInfo {
+  stepId: string;
+  category: 'ELEMENT_MISSING' | 'STATE_MISMATCH' | 'ROUTE_MISMATCH' | 'ACTION_TIMEOUT';
+  targetIdentifier?: string;
+  expected: string;
+  actual: string;
+  message: string;
+}
+
+export interface FlowVerificationConfig {
+  flowFile: string;
+  artifactDir?: string;
+  flowId?: string;
+  scheme?: string;
+}
+
 export interface EvaluationResult {
   passed: boolean;
-  type: 'BUILD' | 'FUNCTIONAL' | 'VISUAL_REVIEW';
+  type: 'BUILD' | 'FUNCTIONAL' | 'VISUAL_REVIEW' | 'FLOW_INTERACTIVE' | 'XCODE_BUILD';
   summary: string;
   errors: BuildError[];
   visualDefects?: VisualDefect[];
+  stateDefects?: StateDefectInfo[];
   meanDelta?: number;
+  flowReport?: any;
 }
 
 export interface TaskHistoryItem {
@@ -74,9 +92,11 @@ export interface TaskContext {
   branchName?: string;
   initialCommitSha?: string;
   visualConfig?: VisualReplicaConfig;
+  flowConfig?: FlowVerificationConfig;
   appBundlePath?: string;
   bundleId?: string;
   capturedScreenshotPath?: string;
   generatedProbesPath?: string;
   history: TaskHistoryItem[];
 }
+

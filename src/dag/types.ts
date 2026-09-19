@@ -29,6 +29,10 @@ export interface TaskGraphVerification {
   test?: {
     testPlan?: string;
   };
+  flow?: {
+    flowFile: string;
+    scheme?: string;
+  };
 }
 
 export interface TaskNode {
