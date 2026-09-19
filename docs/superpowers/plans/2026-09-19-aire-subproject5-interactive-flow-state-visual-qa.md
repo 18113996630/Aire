@@ -37,7 +37,7 @@
 - Consumes: 无（基础类型层）
 - Produces: `FlowDefinition`, `FlowStepDefinition`, `ActionTarget`, `StepExpectation`, `StateAssertion`, `FlowExecutionReport`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/flow/schema-sync.test.ts
@@ -86,22 +86,22 @@ describe('Flow Schema SSOT & Types', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/flow/schema-sync.test.ts`
 预期：FAIL（文件不存在）
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 创建 `schemas/flow-definition.schema.json` 包含 FlowDefinition 的标准 JSON Schema。
 创建 `src/flow/types.ts` 导出完整的 TypeScript 接口定义。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/flow/schema-sync.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add schemas/flow-definition.schema.json src/flow/types.ts tests/unit/flow/schema-sync.test.ts
@@ -120,7 +120,7 @@ git commit -m "feat(flow): add flow definition schema and types"
 - Consumes: `src/flow/types.ts` (`StateAssertion`, `ActionTarget`)
 - Produces: `StateSnapshot`, `ElementSnapshot`, `evaluateStateAssertion(snapshot, assertion): StateDefect[]`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/flow/state-snapshot.test.ts
@@ -185,21 +185,21 @@ describe('StateSnapshot Evaluation & Route Inference', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/flow/state-snapshot.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 在 `src/flow/state-snapshot.ts` 中实现 `ElementSnapshot`, `StateSnapshot`, `StateDefect`, `evaluateStateAssertion`。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/flow/state-snapshot.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add src/flow/state-snapshot.ts tests/unit/flow/state-snapshot.test.ts
@@ -220,7 +220,7 @@ git commit -m "feat(flow): implement state snapshot and assertion evaluator"
 - Consumes: `src/flow/types.ts`, `src/ios/simulator-manager.ts`
 - Produces: `IInteractionDriver`, `ActionResult`, `SimctlInputDriver`, `XCUITestDriver`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/flow/interaction-driver.test.ts
@@ -258,21 +258,21 @@ describe('Interaction Drivers', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/flow/interaction-driver.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 实现 `src/flow/interaction-driver.interface.ts`，`src/flow/simctl-input-driver.ts`（封装 `xcrun simctl io`），`src/flow/xcuitest-driver.ts`（封装 xcodebuild test 命令行执行及环境变量注入）。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/flow/interaction-driver.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add src/flow/interaction-driver.interface.ts src/flow/simctl-input-driver.ts src/flow/xcuitest-driver.ts tests/unit/flow/interaction-driver.test.ts
@@ -295,7 +295,7 @@ git commit -m "feat(flow): implement SimctlInputDriver and XCUITestDriver"
 - Consumes: `schemas/flow-definition.schema.json`
 - Produces: `HarnessInstaller.ensureHarness(projectPath, targetScheme)`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/harness/harness-installer.test.ts
@@ -328,12 +328,12 @@ describe('HarnessInstaller', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/harness/harness-installer.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 创建 4 个 Swift 模板：
 - `FlowModels.swift`: 对齐 Schema 的 Swift Codable 模型；
@@ -342,12 +342,12 @@ describe('HarnessInstaller', () => {
 - `FlowTestRunner.swift`: 标准 XCTest 入口；
 实现 `HarnessInstaller` 复制模板与生成共享 Scheme XML。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/harness/harness-installer.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add src/harness/ tests/unit/harness/harness-installer.test.ts
@@ -366,7 +366,7 @@ git commit -m "feat(harness): create universal swift test harness template and i
 - Consumes: `IInteractionDriver`, `FlowDefinition`, `StateSnapshot`, `evaluateStateAssertion`
 - Produces: `FlowOrchestrator.runFlow(flow, options): Promise<FlowExecutionReport>`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/flow/flow-orchestrator.test.ts
@@ -411,21 +411,21 @@ describe('FlowOrchestrator Fallback & Continuity', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/flow/flow-orchestrator.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 实现 `src/flow/flow-orchestrator.ts`，处理完整 Flow 执行、Level 2 断点续跑重试逻辑与 Report 拼接。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/flow/flow-orchestrator.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add src/flow/flow-orchestrator.ts tests/unit/flow/flow-orchestrator.test.ts
@@ -448,7 +448,7 @@ git commit -m "feat(flow): implement FlowOrchestrator with fallback continuity"
 - Consumes: `IEvaluator`, `FlowOrchestrator`, `AutoProbeGenerator`, `RefkitBridge`
 - Produces: `EvaluationResult` (with `stateDefects` and `visualDefects`), `FlowInteractiveEvaluator`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/unit/evaluator/flow-interactive-evaluator.test.ts
@@ -500,21 +500,21 @@ describe('FlowInteractiveEvaluator Dual-Track Diagnostics', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/unit/evaluator/flow-interactive-evaluator.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 更新 `src/core/types.ts` 和 `src/dag/types.ts`，实现 `src/evaluator/flow/flow-interactive-evaluator.ts`，将其接入 `src/evaluator/evaluator-pipeline.ts`。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/unit/evaluator/flow-interactive-evaluator.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 提交 Git**
+- [x] **Step 5: 提交 Git**
 
 ```bash
 git add src/core/types.ts src/dag/types.ts src/evaluator/ tests/unit/evaluator/flow-interactive-evaluator.test.ts
@@ -534,7 +534,7 @@ git commit -m "feat(evaluator): implement FlowInteractiveEvaluator with dual-tra
 - Consumes: `AnalysisIR`, `FlowDefinition`, `TaskGraphConfig`
 - Produces: 包含 `verification.flow` 的 `TaskNode` 和 `.aire/flows/<flow-id>.json`
 
-- [ ] **Step 1: 编写失败测试**
+- [x] **Step 1: 编写失败测试**
 
 ```typescript
 // tests/integration/flow-orchestrator-e2e.test.ts
@@ -573,27 +573,27 @@ describe('TaskGraphCompiler Flow Integration', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行：`npm test tests/integration/flow-orchestrator-e2e.test.ts`
 预期：FAIL
 
-- [ ] **Step 3: 编写 Minimal Implementation**
+- [x] **Step 3: 编写 Minimal Implementation**
 
 在 `TaskGraphCompiler` 中增加对 `ir.flows` 的编译逻辑，生成 `.aire/flows/*.json` 与绑定 `verification.flow` 的任务节点。
 在 `UiAnalyst` 中确保为 UI 组件标注语义规范的 `accessibilityIdentifier`。
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行：`npm test tests/integration/flow-orchestrator-e2e.test.ts`
 预期：PASS
 
-- [ ] **Step 5: 全量测试回归**
+- [x] **Step 5: 全量测试回归**
 
 运行：`export PATH="/Users/huangrong/.nvm/versions/node/v25.3.0/bin:$PATH" && npm test`
 预期：185+ tests 全部 100% 绿色通过。
 
-- [ ] **Step 6: 提交 Git**
+- [x] **Step 6: 提交 Git**
 
 ```bash
 git add src/planner/task-graph-compiler.ts src/analysis/ui-analyst.ts tests/integration/flow-orchestrator-e2e.test.ts
