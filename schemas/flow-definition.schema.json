@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aire.dev/schemas/flow-definition.schema.json",
+  "title": "FlowDefinition",
+  "description": "AIRE Flow Definition DSL Schema (Single Source of Truth)",
+  "type": "object",
+  "required": ["schemaVersion", "flowId", "name", "description", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version, currently fixed to 1.0"
+    },
+    "flowId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Unique flow identifier"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the interactive flow"
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed description of the user flow"
+    },
+    "bootstrap": {
+      "$ref": "#/$defs/flowBootstrap"
+    },
+    "steps": {
+      "type": "array",
+      "description": "Ordered sequence of flow steps",
+      "items": {
+        "$ref": "#/$defs/flowStepDefinition"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "targetType": {
+      "type": "string",
+      "enum": ["accessibility", "coordinate", "predicate"],
+      "description": "Resolution mechanism for the target element"
+    },
+    "coordinate": {
+      "type": "object",
+      "description": "SwiftUI logical points (pt) with viewport origin at (0, 0)",
+      "required": ["x", "y"],
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "Horizontal logical point (pt)"
+        },
+        "y": {
+          "type": "number",
+          "description": "Vertical logical point (pt)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "actionTarget": {
+      "type": "object",
+      "description": "Target element specification for an action",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/targetType"
+        },
+        "identifier": {
+          "type": "string",
+          "pattern": "^flow\\.[a-zA-Z0-9_.-]+$",
+          "description": "Semantic identifier adhering to flow.<category>.<name> namespace"
+        },
+        "coordinate": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "predicate": {
+          "type": "string",
+          "description": "XCUIElementQuery predicate string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowActionType": {
+      "type": "string",
+      "enum": [
+        "launch",
+        "tap",
+        "input",
+        "clear",
+        "swipe",
+        "scrollTo",
+        "pressBack",
+        "wait"
+      ],
+      "description": "Supported UI interaction action types"
+    },
+    "elementAssertion": {
+      "type": "object",
+      "required": ["target"],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/actionTarget"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "textEquals": {
+          "type": "string"
+        },
+        "textContains": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stateAssertion": {
+      "type": "object",
+      "description": "Runtime UI state assertions for route and element presence",
+      "properties": {
+        "elementsExist": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/elementAssertion"
+          }
+        },
+        "elementsNotExist": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/actionTarget"
+          }
+        },
+        "keyboardVisible": {
+          "type": "boolean"
+        },
+        "expectedRoute": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "visualProbeTolerance": {
+      "type": "object",
+      "properties": {
+        "containerDeltaMax": {
+          "type": "number"
+        },
+        "spacingPtMax": {
+          "type": "number"
+        },
+        "textDeltaMax": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "visualProbes": {
+      "type": "object",
+      "properties": {
+        "focusArea": {
+          "type": "string"
+        },
+        "tolerance": {
+          "$ref": "#/$defs/visualProbeTolerance"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stepExpectation": {
+      "type": "object",
+      "description": "Expectation configuration for verifying step outcome",
+      "properties": {
+        "checkpoint": {
+          "type": "boolean"
+        },
+        "referenceImage": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/stateAssertion"
+        },
+        "visualProbes": {
+          "$ref": "#/$defs/visualProbes"
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowStepDefinition": {
+      "type": "object",
+      "required": ["stepId", "action"],
+      "properties": {
+        "stepId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "action": {
+          "$ref": "#/$defs/flowActionType"
+        },
+        "target": {
+          "$ref": "#/$defs/actionTarget"
+        },
+        "value": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "allowCoordinateFallback": {
+          "type": "boolean"
+        },
+        "expect": {
+          "$ref": "#/$defs/stepExpectation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowBootstrap": {
+      "type": "object",
+      "required": ["type", "value"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["deepLink", "launchArgs"]
+        },
+        "value": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowStepError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "targetIdentifier": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowStepReport": {
+      "type": "object",
+      "required": ["stepId", "action", "success", "targetResolvedBy", "durationMs"],
+      "properties": {
+        "stepId": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/flowActionType"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "targetResolvedBy": {
+          "type": "string",
+          "enum": ["accessibility", "predicate", "coordinate", "none"]
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "error": {
+          "$ref": "#/$defs/flowStepError"
+        },
+        "usedFallback": {
+          "type": "boolean"
+        },
+        "snapshotPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "flowExecutionReport": {
+      "type": "object",
+      "required": [
+        "flowId",
+        "success",
+        "totalDurationMs",
+        "completedSteps",
+        "totalSteps",
+        "stepReports"
+      ],
+      "properties": {
+        "flowId": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "totalDurationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "completedSteps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalSteps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stepReports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/flowStepReport"
+          }
+        },
+        "failedStepId": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
