@@ -234,17 +234,31 @@ export class GraphValidator {
         const hasBuild = !!task.verification.build;
         const hasTest = !!task.verification.test;
         const hasVisual = !!task.verification.visual;
+        const hasFlow = !!task.verification.flow;
 
-        if (!hasBuild && !hasTest && !hasVisual) {
+        if (!hasBuild && !hasTest && !hasVisual && !hasFlow) {
           diagnostics.push({
             rule: 'task.verification.none',
             taskId: taskIdStr,
             severity: 'error',
-            message: `Task "${taskIdStr}" verification block must specify at least one active evaluator (build, test, or visual).`,
+            message: `Task "${taskIdStr}" verification block must specify at least one active evaluator (build, test, visual, or flow).`,
           });
         }
 
+        if (hasFlow && typeof task.verification.flow === 'object') {
+          const flowFile = task.verification.flow.flowFile;
+          if (typeof flowFile !== 'string' || flowFile.trim().length === 0) {
+            diagnostics.push({
+              rule: 'task.verification.flow.flowFile',
+              taskId: taskIdStr,
+              severity: 'error',
+              message: `Task "${taskIdStr}" specifies flow verification but missing "flow.flowFile" path.`,
+            });
+          }
+        }
+
         if (hasVisual && typeof task.verification.visual === 'object') {
+
           const ref = task.verification.visual.reference;
           if (typeof ref !== 'string' || ref.trim().length === 0) {
             diagnostics.push({

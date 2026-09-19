@@ -93,6 +93,7 @@ export class UiAnalyst {
         role: `Primary view component for ${screenTitle}`,
         layout: 'VStack',
         tokens: tokens.map((t) => t.id),
+        accessibilityIdentifier: `flow.screen.${sId.replace(/^screen\./, '')}`,
         probe: {
           id: `probe-${appName.toLowerCase()}-${sId.replace(/^screen\./, '')}`,
           focus: `${appName} layout, typography, and styling`,

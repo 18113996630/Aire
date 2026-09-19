@@ -103,7 +103,7 @@ export class FlowOrchestrator {
                   totalDurationMs:
                     report.totalDurationMs + resumeReport.totalDurationMs + fallbackResult.durationMs,
                   completedSteps: totalCompleted,
-                  totalSteps: flow.steps.count ?? flow.steps.length,
+                  totalSteps: flow.steps.length,
                   stepReports: newStepReports,
                   failedStepId: resumeReport.failedStepId,
                   error: resumeReport.error,

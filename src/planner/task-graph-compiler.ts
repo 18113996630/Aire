@@ -9,8 +9,11 @@
  * - Validates the resulting configuration deterministically via GraphValidator.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { AnalysisIR } from '../analysis/types.ts';
 import type { TaskGraphConfig, TaskNode } from '../dag/types.ts';
+import type { FlowDefinition } from '../flow/types.ts';
 import { GraphValidator } from './graph-validator.ts';
 import type { TaskGraphCompilerOptions } from './types.ts';
 
@@ -206,6 +209,51 @@ export class TaskGraphCompiler {
       });
     }
 
+    // 5. Compile Interactive Flow Tasks (for flows with defined interactive steps)
+    for (const flow of (ir.flows ?? []).filter((f) => f.steps && f.steps.length > 0)) {
+      const flowTaskId = `task-flow-${flow.id.toLowerCase()}`;
+      const flowRelPath = `.aire/flows/${flow.id}.json`;
+      const flowDef = this.compileFlowDefinition(flow);
+
+      if (this.options.projectPath) {
+        const flowFullPath = path.resolve(this.options.projectPath, flowRelPath);
+        fs.mkdirSync(path.dirname(flowFullPath), { recursive: true });
+        fs.writeFileSync(flowFullPath, JSON.stringify(flowDef, null, 2), 'utf8');
+      }
+
+      const flowDeps = (hasMultipleScreens || hasNavFlows)
+        ? ['task-nav-coordinator']
+        : viewTaskIds.length > 0
+        ? [...viewTaskIds]
+        : [...modelTaskIds];
+
+      const allowedFile = (hasMultipleScreens || hasNavFlows)
+        ? `${ir.appName}/Navigation/${ir.appName}Coordinator.swift`
+        : (viewTaskIds.length > 0
+            ? `${ir.appName}/Views/${ir.appName}View.swift`
+            : `${ir.appName}/Models/${ir.appName}Model.swift`);
+
+      tasks.push({
+        id: flowTaskId,
+        title: `Verify ${flow.name} Interactive Flow`,
+        goal: `Execute and verify multi-step interactive flow ${flow.name} with state assertions`,
+        role: 'QA Engineer',
+        dependencies: flowDeps,
+        dependents: [],
+        allowed_files: [allowedFile],
+        acceptance_criteria: [
+          `Flow ${flow.id} completes all steps without failure`,
+          `All route transitions match expected routes`,
+        ],
+        verification: {
+          flow: {
+            flowFile: flowRelPath,
+            scheme: ir.targetScheme ?? 'AIREUITests',
+          },
+        },
+      });
+    }
+
     const config: TaskGraphConfig = {
       version: '1.0.0',
       project: {
@@ -215,7 +263,7 @@ export class TaskGraphCompiler {
       tasks,
     };
 
-    // 5. Deterministic Semantic Validation
+    // 6. Deterministic Semantic Validation
     const report = GraphValidator.validate(config, { projectPath: this.options.projectPath });
     if (!report.valid) {
       const errorMsg = report.diagnostics
@@ -227,4 +275,32 @@ export class TaskGraphCompiler {
 
     return config;
   }
+
+  compileFlowDefinition(irFlow: any): FlowDefinition {
+    return {
+      schemaVersion: '1.0',
+      flowId: irFlow.id,
+      name: irFlow.name,
+      description: irFlow.description ?? '',
+      steps: (irFlow.steps ?? []).map((s: any, idx: number) => {
+        const stepNumber = s.stepNumber ?? idx + 1;
+        const tapMatch = typeof s.action === 'string' ? s.action.match(/^tap\((.+)\)$/) : null;
+        const identifier = tapMatch ? tapMatch[1] : (typeof s.action === 'string' ? s.action : undefined);
+
+        return {
+          stepId: `step-${stepNumber}`,
+          action: 'tap',
+          target: identifier ? { type: 'accessibility', identifier } : undefined,
+          allowCoordinateFallback: true,
+          expect: {
+            checkpoint: true,
+            state: s.expectedState
+              ? { expectedRoute: s.expectedState.replace(/^screen\./, '') }
+              : undefined,
+          },
+        };
+      }),
+    };
+  }
 }
+

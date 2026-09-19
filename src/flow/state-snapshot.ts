@@ -204,14 +204,14 @@ function matchPredicate(elem: ElementSnapshot, predicate: string): boolean {
   const equalsMatch = predicate.match(/([a-zA-Z0-9_]+)\s*==\s*['"]([^'"]+)['"]/);
   if (equalsMatch) {
     const [, property, value] = equalsMatch;
-    const elemProp = (elem as Record<string, unknown>)[property];
+    const elemProp = (elem as unknown as Record<string, unknown>)[property];
     return String(elemProp) === value;
   }
 
   const containsMatch = predicate.match(/([a-zA-Z0-9_]+)\s+CONTAINS(?:\[c\])?\s+['"]([^'"]+)['"]/i);
   if (containsMatch) {
     const [, property, value] = containsMatch;
-    const elemProp = (elem as Record<string, unknown>)[property];
+    const elemProp = (elem as unknown as Record<string, unknown>)[property];
     if (typeof elemProp === 'string') {
       return elemProp.toLowerCase().includes(value.toLowerCase());
     }

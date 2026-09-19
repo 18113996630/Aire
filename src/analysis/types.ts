@@ -73,6 +73,7 @@ export interface ComponentSpec {
   role: string;
   layout: LayoutFlow;
   tokens: string[]; // references VisualToken.id
+  accessibilityIdentifier?: string;
   subcomponents?: ComponentSpec[];
   probe?: ComponentProbeSpec;
 }
