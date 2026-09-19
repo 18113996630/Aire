@@ -38,6 +38,14 @@ export interface PlanExecuteResult {
   specPaths: string[];
 }
 
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+  const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  await fs.writeFile(tmpPath, content, 'utf-8');
+  await fs.rename(tmpPath, filePath);
+}
+
 export class PlannerOrchestrator {
   private pipeline: AnalysisPipeline;
   private compiler: TaskGraphCompiler;
@@ -58,19 +66,18 @@ export class PlannerOrchestrator {
     const pipelineResult = await this.pipeline.run(options);
     const ir = pipelineResult.ir;
 
-    // 2. Compile IR to TaskGraphConfig
+    // 2. Compile IR to TaskGraphConfig with projectPath context
     const compiler = options.compilerOptions
-      ? new TaskGraphCompiler(options.compilerOptions)
-      : this.compiler;
+      ? new TaskGraphCompiler({ projectPath: options.projectPath, ...options.compilerOptions })
+      : new TaskGraphCompiler({ projectPath: options.projectPath });
     const config = compiler.compile(ir);
 
     // 3. Serialize to YAML
     const yamlContent = YAML.stringify(config);
 
-    // 4. Write to outputPath
+    // 4. Write to outputPath atomically
     const outputPath = options.outputPath ?? path.join(options.projectPath, 'task-graph.yaml');
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.writeFile(outputPath, yamlContent, 'utf-8');
+    await writeFileAtomic(outputPath, yamlContent);
 
     return {
       ir,

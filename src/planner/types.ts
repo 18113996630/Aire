@@ -21,4 +21,5 @@ export interface ValidationReport {
 export interface TaskGraphCompilerOptions {
   includeVisualVerification?: boolean;
   maxRetries?: number;
+  projectPath?: string;
 }

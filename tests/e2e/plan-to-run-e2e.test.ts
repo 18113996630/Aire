@@ -71,7 +71,7 @@ describe('E2E: Upstream Multi-Agent Planner (aire plan)', () => {
         '--prd', prdPath,
         '--output', outYaml,
       ],
-      { encoding: 'utf8', cwd: repoRoot }
+      { encoding: 'utf8', cwd: repoRoot, env: { ...process.env, AIRE_MOCK_RUNNER: '1' } }
     );
 
     assert.match(stdout, /Upstream Planning Succeeded/);

@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import * as path from 'node:path';
 import { GraphValidator } from '../../../src/planner/graph-validator.ts';
 import type { TaskGraphConfig } from '../../../src/dag/types.ts';
 
@@ -34,7 +35,7 @@ describe('GraphValidator', () => {
         verification: {
           build: true,
           visual: {
-            reference: 'references/card.png',
+            reference: 'fixtures/MiniApp/reference.png',
             focus: 'Card layout',
           },
         },
@@ -124,6 +125,111 @@ describe('GraphValidator', () => {
     const report = GraphValidator.validate(config);
     assert.equal(report.valid, false);
     assert.ok(report.diagnostics.some((d) => d.rule === 'task.file_boundary.overlap_conflict'));
+  });
+
+  test('flags file boundary overlap conflict with glob and directory prefix', () => {
+    const config: TaskGraphConfig = {
+      ...baseValidConfig,
+      tasks: [
+        {
+          id: 'task-glob',
+          title: 'Task Glob',
+          goal: 'Edit Views',
+          role: 'iOS Developer',
+          dependencies: [],
+          dependents: [],
+          allowed_files: ['MiniApp/Views/*'],
+          acceptance_criteria: ['Pass'],
+          verification: { build: true },
+        },
+        {
+          id: 'task-specific',
+          title: 'Task Specific',
+          goal: 'Edit specific view',
+          role: 'iOS Developer',
+          dependencies: [], // independent!
+          dependents: [],
+          allowed_files: ['MiniApp/Views/HomeView.swift'],
+          acceptance_criteria: ['Pass'],
+          verification: { build: true },
+        },
+      ],
+    };
+    const report = GraphValidator.validate(config);
+    assert.equal(report.valid, false);
+    assert.ok(report.diagnostics.some((d) => d.rule === 'task.file_boundary.overlap_conflict'));
+  });
+
+  test('handles invalid non-string task.id and non-object tasks deterministically without throwing TypeError', () => {
+    const malformedConfig: any = {
+      version: '1.0.0',
+      project: { name: 'App', targetScheme: 'App' },
+      tasks: [
+        { id: 12345, goal: 'Valid goal', role: 'iOS Developer', allowed_files: ['App/A.swift'], acceptance_criteria: ['OK'], verification: { build: true } },
+        null,
+        'not a task object',
+        { id: 'task-valid', goal: 999, role: false, allowed_files: 'not an array', acceptance_criteria: [], verification: null },
+      ],
+    };
+
+    assert.doesNotThrow(() => {
+      const report = GraphValidator.validate(malformedConfig);
+      assert.equal(report.valid, false);
+      assert.ok(report.diagnostics.some((d) => d.rule === 'task.id'));
+      assert.ok(report.diagnostics.some((d) => d.rule === 'schema.task'));
+      assert.ok(report.diagnostics.some((d) => d.rule === 'task.goal'));
+    });
+  });
+
+  test('checks visual.reference file existence on disk when projectPath is provided', () => {
+    const config: TaskGraphConfig = {
+      ...baseValidConfig,
+      tasks: [
+        {
+          id: 'task-visual',
+          title: 'Visual Task',
+          goal: 'Verify nonexistent image',
+          role: 'iOS Developer',
+          dependencies: [],
+          dependents: [],
+          allowed_files: ['MiniApp/View.swift'],
+          acceptance_criteria: ['Render'],
+          verification: {
+            visual: {
+              reference: 'non_existent_reference_image.png',
+            },
+          },
+        },
+      ],
+    };
+
+    const report = GraphValidator.validate(config, { projectPath: path.resolve('fixtures/MiniApp') });
+    assert.equal(report.valid, false);
+    assert.ok(report.diagnostics.some((d) => d.rule === 'task.verification.visual.reference_not_found'));
+
+    // When valid reference is given, it passes
+    const validConfig: TaskGraphConfig = {
+      ...baseValidConfig,
+      tasks: [
+        {
+          id: 'task-visual',
+          title: 'Visual Task',
+          goal: 'Verify existing image',
+          role: 'iOS Developer',
+          dependencies: [],
+          dependents: [],
+          allowed_files: ['MiniApp/View.swift'],
+          acceptance_criteria: ['Render'],
+          verification: {
+            visual: {
+              reference: 'reference.png',
+            },
+          },
+        },
+      ],
+    };
+    const validReport = GraphValidator.validate(validConfig, { projectPath: path.resolve('fixtures/MiniApp') });
+    assert.equal(validReport.valid, true);
   });
 
   test('permits file overlap when causal dependency exists', () => {

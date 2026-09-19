@@ -138,6 +138,58 @@ describe('TaskGraphCompiler & PlannerOrchestrator', () => {
     assert.equal(taskGraph.getAllTasks().length, 3);
   });
 
+  test('compiles multi-screen and flow requirements into navigation coordinator task with token constraints', () => {
+    const multiScreenIR: AnalysisIR = {
+      ...sampleIR,
+      requirements: [
+        { id: 'req.data.item', title: 'Data persistence', category: 'data', acceptanceCriteria: ['Save to SwiftData'] },
+        { id: 'req.fn.toggle', title: 'Toggle feature', category: 'functional', acceptanceCriteria: ['Supports toggling status'] },
+        { id: 'req.ui.card', title: 'Styled card', category: 'ui', acceptanceCriteria: ['Card padding 16pt'] },
+        { id: 'req.nav.route', title: 'Navigation flow', category: 'navigation', acceptanceCriteria: ['Push detail view on tap'] },
+      ],
+      screens: [
+        sampleIR.screens[0],
+        {
+          id: 'screen.detail',
+          title: 'Detail Screen',
+          route: '/detail',
+          safeArea: { top: true, bottom: true },
+          components: [
+            {
+              id: 'comp.detail',
+              name: 'DetailCardView',
+              role: 'Detail View',
+              layout: 'VStack',
+              tokens: ['color.bg'],
+            },
+          ],
+        },
+      ],
+    };
+
+    const compiler = new TaskGraphCompiler();
+    const config = compiler.compile(multiScreenIR);
+
+    // Expect: 1 Model + 1 ViewModel + 2 Views + 1 Navigation Coordinator = 5 tasks
+    assert.equal(config.tasks.length, 5);
+
+    const modelTask = config.tasks.find((t) => t.id === 'task-data-greeting');
+    assert.ok(modelTask?.acceptance_criteria.includes('Save to SwiftData'));
+
+    const vmTask = config.tasks.find((t) => t.id === 'task-vm-greetingviewmodel');
+    assert.ok(vmTask?.acceptance_criteria.includes('Supports toggling status'));
+
+    const viewTask = config.tasks.find((t) => t.id === 'task-view-greetingcardview');
+    assert.ok(viewTask?.acceptance_criteria.some((c) => c.includes('Adheres strictly to tokens: color.bg')));
+    assert.ok(viewTask?.acceptance_criteria.includes('Card padding 16pt'));
+
+    const navTask = config.tasks.find((t) => t.id === 'task-nav-coordinator');
+    assert.ok(navTask);
+    assert.ok(navTask.dependencies.includes('task-view-greetingcardview'));
+    assert.ok(navTask.dependencies.includes('task-view-detailcardview'));
+    assert.ok(navTask.acceptance_criteria.includes('Push detail view on tap'));
+  });
+
   test('PlannerOrchestrator runs end-to-end and creates task-graph.yaml and spec documents', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aire-orchestrator-'));
     const prdPath = path.join(tmpDir, 'prd.md');

@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import { AnalysisPipeline } from '../../../src/analysis/analysis-pipeline.ts';
 
 describe('AnalysisPipeline', () => {
-  test('executes progressive hydration pipeline and exports JSON IR and Markdown specs', async () => {
+  test('executes progressive hydration pipeline and exports JSON IR and Markdown specs with reference path contract', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aire-pipeline-'));
     const prdPath = path.join(tmpDir, 'prd.md');
     await fs.writeFile(
@@ -31,12 +31,18 @@ describe('AnalysisPipeline', () => {
     assert.ok(result.ir.entities.length > 0);
     assert.ok(result.ir.architecture.fileBoundaries.length > 0);
 
-    // 2. Assert .aire/analysis-ir.json exists
+    // 2. Assert Reference Path Contract
+    const refImagePath = path.join(tmpDir, '.aire', 'evidence', 'images', 'reference.png');
+    const refCopied = await fs.stat(refImagePath).then(() => true).catch(() => false);
+    assert.ok(refCopied, 'Reference image must be copied into .aire/evidence/images/');
+    assert.equal(result.ir.screens[0].referenceImage, '.aire/evidence/images/reference.png');
+
+    // 3. Assert .aire/analysis-ir.json exists
     const rawJson = await fs.readFile(result.irPath, 'utf-8');
     const parsed = JSON.parse(rawJson);
     assert.equal(parsed.appName, 'MiniApp');
 
-    // 3. Assert Markdown projections exist
+    // 4. Assert Markdown projections exist
     assert.equal(result.exportedMarkdownFiles.length, 3);
     for (const mdPath of result.exportedMarkdownFiles) {
       const exists = await fs.stat(mdPath).then(() => true).catch(() => false);

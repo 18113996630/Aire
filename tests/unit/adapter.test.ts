@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { MockCliAdapter } from '../../src/runtime/mock.adapter.ts';
 import { OpenCodeCliAdapter } from '../../src/runtime/opencode.adapter.ts';
+import { AntigravityCliAdapter } from '../../src/runtime/antigravity.adapter.ts';
 
 describe('CliAdapters', () => {
   test('MockCliAdapter executes custom scripted responses per iteration', async () => {
@@ -39,6 +40,13 @@ describe('CliAdapters', () => {
     assert.equal(res.exitCode, 0);
     assert.equal(res.stdout, 'Default mock execution');
     assert.equal(res.durationMs, 5);
+  });
+
+  test('AntigravityCliAdapter initializes and detects unavailable binary for non-existent path', async () => {
+    const adapter = new AntigravityCliAdapter('/nonexistent/bin/agy');
+    assert.equal(adapter.name, 'Antigravity');
+    const available = await adapter.isAvailable();
+    assert.equal(available, false);
   });
 
   test('OpenCodeCliAdapter initializes and detects unavailable binary for non-existent path', async () => {

@@ -2,8 +2,11 @@
  * AIRE Task Graph Compiler
  *
  * Compiles a hydrated Analysis IR into a strongly-typed, topologically-sound TaskGraphConfig.
- * Transforms domain entities, view models, views, and visual probes into atomic tasks.
- * Validates the resulting configuration deterministically via GraphValidator.
+ * Fully consumes IR:
+ * - Requirements mapped to data, viewModel, and view acceptance criteria
+ * - Tokens mapped to UI design specifications and visual probes
+ * - Flows and multi-screen architecture mapped to Navigation & Coordinator tasks
+ * - Validates the resulting configuration deterministically via GraphValidator.
  */
 
 import type { AnalysisIR } from '../analysis/types.ts';
@@ -35,12 +38,28 @@ export class TaskGraphCompiler {
     const tasks: TaskNode[] = [];
     const modelTaskIds: string[] = [];
     const viewModelTaskIds: string[] = [];
+    const viewTaskIds: string[] = [];
+
+    // Group requirements by category
+    const dataReqs = ir.requirements.filter((r) => r.category === 'data');
+    const funcReqs = ir.requirements.filter((r) => r.category === 'functional');
+    const uiReqs = ir.requirements.filter((r) => r.category === 'ui');
+    const navReqs = ir.requirements.filter((r) => r.category === 'navigation');
 
     // 1. Compile Data Entity Tasks (Roots of the DAG)
     for (const entity of ir.entities) {
       const taskId = `task-data-${entity.name.toLowerCase()}`;
       const modelFile = `${ir.appName}/Models/${entity.name}.swift`;
       modelTaskIds.push(taskId);
+
+      const criteria = [
+        `${entity.name} compiles cleanly conforming to ${entity.conformance.join(', ')}`,
+        `Includes fields: ${entity.fields.map((f) => f.name).join(', ')}`,
+      ];
+
+      for (const req of dataReqs) {
+        criteria.push(...req.acceptanceCriteria);
+      }
 
       tasks.push({
         id: taskId,
@@ -50,10 +69,7 @@ export class TaskGraphCompiler {
         dependencies: [],
         dependents: [],
         allowed_files: [modelFile],
-        acceptance_criteria: [
-          `${entity.name} compiles cleanly conforming to ${entity.conformance.join(', ')}`,
-          `Includes fields: ${entity.fields.map((f) => f.name).join(', ')}`,
-        ],
+        acceptance_criteria: Array.from(new Set(criteria)),
         verification: {
           build: true,
         },
@@ -88,6 +104,13 @@ export class TaskGraphCompiler {
       const taskId = `task-vm-${vmName.toLowerCase()}`;
       viewModelTaskIds.push(taskId);
 
+      const criteria = [
+        `${vmName} compiles cleanly and provides state publishers for views`,
+      ];
+      for (const req of funcReqs) {
+        criteria.push(...req.acceptanceCriteria);
+      }
+
       tasks.push({
         id: taskId,
         title: `Implement ${vmName}`,
@@ -96,9 +119,7 @@ export class TaskGraphCompiler {
         dependencies: [...modelTaskIds],
         dependents: [],
         allowed_files: [vmFile],
-        acceptance_criteria: [
-          `${vmName} compiles cleanly and provides state publishers for views`,
-        ],
+        acceptance_criteria: Array.from(new Set(criteria)),
         verification: {
           build: true,
         },
@@ -112,6 +133,7 @@ export class TaskGraphCompiler {
       for (const comp of screen.components) {
         const taskId = `task-view-${comp.name.toLowerCase()}`;
         const viewFile = `${ir.appName}/Views/${comp.name}.swift`;
+        viewTaskIds.push(taskId);
 
         const verification: any = { build: true };
 
@@ -129,21 +151,59 @@ export class TaskGraphCompiler {
           };
         }
 
+        const criteria = [
+          `${comp.name} renders according to SwiftUI design specs`,
+          ...(comp.tokens.length > 0 ? [`Adheres strictly to tokens: ${comp.tokens.join(', ')}`] : []),
+          ...(verification.visual ? ['Passes pixel-level probe verification within tolerance'] : []),
+        ];
+
+        for (const req of uiReqs) {
+          criteria.push(...req.acceptanceCriteria);
+        }
+
         tasks.push({
           id: taskId,
           title: `Implement ${comp.name}`,
-          goal: `Create SwiftUI ${comp.layout} layout for ${comp.name}`,
+          goal: `Create SwiftUI ${comp.layout} layout for ${comp.name} adhering to ${screen.title} route ${screen.route}`,
           role: 'iOS Developer',
           dependencies: [...viewDependencies],
           dependents: [],
           allowed_files: [viewFile],
-          acceptance_criteria: [
-            `${comp.name} renders according to SwiftUI design specs`,
-            ...(verification.visual ? ['Passes pixel-level probe verification within tolerance'] : []),
-          ],
+          acceptance_criteria: Array.from(new Set(criteria)),
           verification,
         });
       }
+    }
+
+    // 4. Compile Navigation & Flow Coordinator Task if multiple screens or navigation requirements exist
+    const hasMultipleScreens = ir.screens.length > 1;
+    const hasNavFlows = navReqs.length > 0 || (ir.flows.length > 0 && ir.flows.some((f) => f.steps.length > 1));
+
+    if (hasMultipleScreens || hasNavFlows) {
+      const navTaskId = `task-nav-coordinator`;
+      const navFile = `${ir.appName}/Navigation/${ir.appName}Coordinator.swift`;
+
+      const criteria = [
+        `Coordinates routes: ${ir.screens.map((s) => s.route).join(', ')}`,
+        `Implements flows: ${ir.flows.map((f) => f.name).join(', ')}`,
+      ];
+      for (const req of navReqs) {
+        criteria.push(...req.acceptanceCriteria);
+      }
+
+      tasks.push({
+        id: navTaskId,
+        title: `Implement ${ir.appName} Navigation Coordinator`,
+        goal: `Implement NavigationStack and routing across ${ir.screens.map((s) => s.title).join(', ')}`,
+        role: 'iOS Developer',
+        dependencies: [...viewTaskIds],
+        dependents: [],
+        allowed_files: [navFile],
+        acceptance_criteria: Array.from(new Set(criteria)),
+        verification: {
+          build: true,
+        },
+      });
     }
 
     const config: TaskGraphConfig = {
@@ -155,8 +215,8 @@ export class TaskGraphCompiler {
       tasks,
     };
 
-    // 4. Deterministic Semantic Validation
-    const report = GraphValidator.validate(config);
+    // 5. Deterministic Semantic Validation
+    const report = GraphValidator.validate(config, { projectPath: this.options.projectPath });
     if (!report.valid) {
       const errorMsg = report.diagnostics
         .filter((d) => d.severity === 'error')
